@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { addDoc, collection, doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
+import {
+  addDoc,
+  collection,
+  doc,
+  getDoc,
+  setDoc,
+  serverTimestamp,
+} from "firebase/firestore";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import {
@@ -18,6 +25,7 @@ import {
   Flame,
   Home,
   LogOut,
+  Menu,
   MoreHorizontal,
   Play,
   Plus,
@@ -42,11 +50,23 @@ import {
   findCatalogExercise,
   type CatalogExercise,
 } from "./lib/exerciseCatalog";
-import { loadNextWorkout, loadWorkouts, saveCompletedWorkout, type WorkoutListItem } from "./lib/workouts";
+import {
+  loadNextWorkout,
+  loadWorkouts,
+  saveCompletedWorkout,
+  type WorkoutListItem,
+} from "./lib/workouts";
 import { extractWorkoutText } from "./lib/fileImport";
 import { analyzeWorkoutWithAi, type AiWorkoutImport } from "./lib/aiImport";
 import { firebaseAuth, firestore } from "./lib/firebase";
-import { deleteFirebaseWorkout, loadFirebaseProgress, loadFirebaseWorkouts, loadNextFirebaseWorkout, saveFirebaseWorkout, updateFirebaseWorkout } from "./lib/firestoreWorkouts";
+import {
+  deleteFirebaseWorkout,
+  loadFirebaseProgress,
+  loadFirebaseWorkouts,
+  loadNextFirebaseWorkout,
+  saveFirebaseWorkout,
+  updateFirebaseWorkout,
+} from "./lib/firestoreWorkouts";
 
 type AppSession = { user: User & { user_metadata?: Record<string, unknown> } };
 
@@ -57,11 +77,81 @@ function stripUndefined<T extends Record<string, unknown>>(value: T): T {
 }
 
 function isBodyweightExercise(name: string) {
-  return /traction|pull[- ]?up|chin[- ]?up|dips?|pompe|push[- ]?up|muscle[- ]?up|gainage|planche/i.test(name);
+  return /traction|pull[- ]?up|chin[- ]?up|dips?|pompe|push[- ]?up|muscle[- ]?up|gainage|planche/i.test(
+    name,
+  );
+}
+
+const frenchMuscles: Record<string, string> = {
+  abdominals: "abdominaux",
+  abductor: "abducteurs",
+  adductors: "adducteurs",
+  biceps: "biceps",
+  calves: "mollets",
+  chest: "pectoraux",
+  forearms: "avant-bras",
+  glutes: "fessiers",
+  hamstrings: "ischio-jambiers",
+  lats: "dorsaux",
+  lower: "bas du dos",
+  middle: "milieu du dos",
+  neck: "cou",
+  quadriceps: "quadriceps",
+  shoulders: "épaules",
+  traps: "trapèzes",
+  triceps: "triceps",
+  back: "dos",
+  "full body": "corps entier",
+};
+const frenchEquipment: Record<string, string> = {
+  "body only": "poids du corps",
+  barbell: "barre",
+  dumbbell: "haltères",
+  machine: "machine",
+  cable: "poulie",
+  kettlebells: "kettlebell",
+  "foam roll": "rouleau de massage",
+  bands: "élastiques",
+  other: "autre",
+  exercise: "sans matériel",
+};
+function frenchLabel(
+  value: string | null | undefined,
+  map: Record<string, string>,
+  fallback: string,
+) {
+  return value ? (map[value.toLowerCase()] ?? value) : fallback;
+}
+function frenchGuideInstructions(exercise: CatalogExercise) {
+  const muscles =
+    exercise.primaryMuscles
+      ?.map((muscle) => frenchLabel(muscle, frenchMuscles, muscle))
+      .join(" et ") || "la zone ciblée";
+  const equipment = frenchLabel(
+    exercise.equipment,
+    frenchEquipment,
+    "le matériel adapté",
+  );
+  return [
+    `Installez-vous avec ${equipment} et adoptez une position stable.`,
+    `Placez votre corps pour cibler principalement ${muscles}, en gardant la colonne et les articulations dans une position confortable.`,
+    "Réalisez le mouvement lentement et de manière contrôlée, sans à-coups ni élan.",
+    "Respirez régulièrement et arrêtez-vous en cas de douleur inhabituelle. Adaptez l’amplitude et la charge à votre niveau.",
+  ];
 }
 
 type Screen =
-  "home" | "sessions" | "workout" | "tools" | "guide" | "progress" | "clients" | "client-detail" | "programs" | "program-detail" | "profile";
+  | "home"
+  | "sessions"
+  | "workout"
+  | "tools"
+  | "guide"
+  | "progress"
+  | "clients"
+  | "client-detail"
+  | "programs"
+  | "program-detail"
+  | "profile";
 
 function App() {
   const [role, setRole] = useState<Role | null>(null);
@@ -69,6 +159,7 @@ function App() {
   const [authReady, setAuthReady] = useState(false);
   const [demoMode, setDemoMode] = useState(false);
   const [screen, setScreen] = useState<Screen>("home");
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [workout, setWorkout] = useState<Workout>(seedWorkout);
   const [active, setActive] = useState(false);
   const [effort, setEffort] = useState<Effort | null>(null);
@@ -100,7 +191,10 @@ function App() {
         await setDoc(
           doc(firestore, "profiles", session.user.uid),
           {
-            display_name: session.user.displayName ?? session.user.email?.split("@")[0] ?? "Membre",
+            display_name:
+              session.user.displayName ??
+              session.user.email?.split("@")[0] ??
+              "Membre",
             email: session.user.email ?? null,
             role: nextRole,
             created_at: serverTimestamp(),
@@ -108,7 +202,11 @@ function App() {
           { merge: true },
         );
       } catch (error) {
-        notify(error instanceof Error ? error.message : "Impossible d’enregistrer votre choix.");
+        notify(
+          error instanceof Error
+            ? error.message
+            : "Impossible d’enregistrer votre choix.",
+        );
         return;
       }
     }
@@ -148,7 +246,8 @@ function App() {
     if (!session || !role || role === "coach") return;
     (session
       ? loadNextFirebaseWorkout(session.user.uid)
-      : Promise.resolve(null))
+      : Promise.resolve(null)
+    )
       .then((next) => {
         if (next) setWorkout(next);
         else
@@ -175,7 +274,11 @@ function App() {
         invite_token: token,
       });
       if (error) {
-        notify(error.message.includes("expir") ? "Invitation invalide ou expirée." : error.message);
+        notify(
+          error.message.includes("expir")
+            ? "Invitation invalide ou expirée."
+            : error.message,
+        );
         return;
       }
       await client.auth.updateUser({
@@ -211,7 +314,12 @@ function App() {
   const finish = async (durationSeconds = 0) => {
     if (session && !demoMode) {
       try {
-        await saveFirebaseWorkout(session.user.uid, workout, effort, durationSeconds);
+        await saveFirebaseWorkout(
+          session.user.uid,
+          workout,
+          effort,
+          durationSeconds,
+        );
       } catch (error) {
         notify(
           error instanceof Error ? error.message : "Échec de l’enregistrement.",
@@ -228,6 +336,10 @@ function App() {
     else if (screen === "client-detail") setScreen("clients");
     else if (screen === "program-detail") setScreen("programs");
     else setScreen("home");
+  };
+  const navigateMobile = (next: Screen) => {
+    setScreen(next);
+    setMobileMenuOpen(false);
   };
   return (
     <div className="app-shell">
@@ -266,7 +378,12 @@ function App() {
                 label="Outils"
                 onClick={() => setScreen("tools")}
               />
-              <Nav active={screen === "guide"} icon={<BookOpen />} label="Guide" onClick={() => setScreen("guide")} />
+              <Nav
+                active={screen === "guide"}
+                icon={<BookOpen />}
+                label="Guide"
+                onClick={() => setScreen("guide")}
+              />
               <Nav
                 active={screen === "profile"}
                 icon={<UserRound />}
@@ -300,7 +417,12 @@ function App() {
                 label="Outils"
                 onClick={() => setScreen("tools")}
               />
-              <Nav active={screen === "guide"} icon={<BookOpen />} label="Guide" onClick={() => setScreen("guide")} />
+              <Nav
+                active={screen === "guide"}
+                icon={<BookOpen />}
+                label="Guide"
+                onClick={() => setScreen("guide")}
+              />
               <Nav
                 active={screen === "profile"}
                 icon={<UserRound />}
@@ -325,12 +447,19 @@ function App() {
       </aside>
       <main>
         <header className="topbar">
+          <button className="mobile-menu-button" type="button" onClick={() => setMobileMenuOpen(true)} aria-label="Ouvrir le menu">
+            <Menu size={21} />
+          </button>
           <Brand mobile />
           <div className="top-actions">
             <span className="demo-pill">
               {isSupabaseConfigured ? "Données disponibles" : "Mode démo"}
             </span>
-            <button className="icon-button" disabled title="Notifications à venir">
+            <button
+              className="icon-button"
+              disabled
+              title="Notifications à venir"
+            >
               <Bell size={19} />
             </button>
             <button
@@ -342,6 +471,25 @@ function App() {
             </button>
           </div>
         </header>
+        {mobileMenuOpen && (
+          <>
+            <button className="mobile-menu-backdrop" type="button" aria-label="Fermer le menu" onClick={() => setMobileMenuOpen(false)} />
+            <aside className="mobile-drawer" aria-label="Menu de navigation">
+              <div className="mobile-drawer-head"><Brand /><button type="button" onClick={() => setMobileMenuOpen(false)} aria-label="Fermer"><X size={21} /></button></div>
+              <nav>
+                <button className={screen === "home" ? "active" : ""} onClick={() => navigateMobile("home")}><Home size={19} />Accueil</button>
+                {role === "coach" ? <>
+                  <button className={screen === "clients" ? "active" : ""} onClick={() => navigateMobile("clients")}><UsersRound size={19} />Clients</button>
+                  <button className={screen === "programs" ? "active" : ""} onClick={() => navigateMobile("programs")}><CalendarDays size={19} />Programmes</button>
+                </> : <button className={screen === "sessions" || screen === "workout" ? "active" : ""} onClick={() => navigateMobile("sessions")}><Dumbbell size={19} />Séances</button>}
+                <button className={screen === "progress" ? "active" : ""} onClick={() => navigateMobile("progress")}><BarChart3 size={19} />Progression</button>
+                <button className={screen === "tools" ? "active" : ""} onClick={() => navigateMobile("tools")}><TimerReset size={19} />Outils</button>
+                <button className={screen === "guide" ? "active" : ""} onClick={() => navigateMobile("guide")}><BookOpen size={19} />Guide</button>
+                <button className={screen === "profile" ? "active" : ""} onClick={() => navigateMobile("profile")}><UserRound size={19} />Profil</button>
+              </nav>
+            </aside>
+          </>
+        )}
         {screen !== "home" && (
           <button className="page-back-button" onClick={goBack}>
             <ArrowLeft size={17} /> Retour
@@ -353,9 +501,32 @@ function App() {
           <MovementGuide />
         ) : role === "coach" ? (
           screen === "profile" ? (
-            <Profile role={role} displayName={displayName} email={session?.user.email ?? ""} demoMode={demoMode} onRole={() => setRole(null)} onSignOut={() => void signOut()} />
+            <Profile
+              role={role}
+              displayName={displayName}
+              email={session?.user.email ?? ""}
+              demoMode={demoMode}
+              onRole={() => setRole(null)}
+              onSignOut={() => void signOut()}
+            />
           ) : (
-            <Coach screen={screen} setScreen={setScreen} notify={notify} displayName={displayName} onImport={() => setImportOpen(true)} selectedClientId={selectedClientId} onSelectClient={(id) => { setSelectedClientId(id); setScreen("client-detail"); }} selectedProgramId={selectedProgramId} onSelectProgram={(id) => { setSelectedProgramId(id); setScreen("program-detail"); }} />
+            <Coach
+              screen={screen}
+              setScreen={setScreen}
+              notify={notify}
+              displayName={displayName}
+              onImport={() => setImportOpen(true)}
+              selectedClientId={selectedClientId}
+              onSelectClient={(id) => {
+                setSelectedClientId(id);
+                setScreen("client-detail");
+              }}
+              selectedProgramId={selectedProgramId}
+              onSelectProgram={(id) => {
+                setSelectedProgramId(id);
+                setScreen("program-detail");
+              }}
+            />
           )
         ) : screen === "home" ? (
           <MemberHome
@@ -389,7 +560,7 @@ function App() {
             total={total}
             effort={effort}
             setEffort={setEffort}
-    finish={finish}
+            finish={finish}
             onLaunchBlock={(exercise) => {
               if (!exercise.blockType) return;
               setToolPreset({
@@ -404,10 +575,16 @@ function App() {
         ) : screen === "progress" ? (
           <Progress />
         ) : (
-          <Profile role={role} displayName={displayName} email={session?.user.email ?? ""} demoMode={demoMode} onRole={() => setRole(null)} onSignOut={() => void signOut()} />
+          <Profile
+            role={role}
+            displayName={displayName}
+            email={session?.user.email ?? ""}
+            demoMode={demoMode}
+            onRole={() => setRole(null)}
+            onSignOut={() => void signOut()}
+          />
         )}
       </main>
-      {role !== "coach" && <MobileNav screen={screen} setScreen={setScreen} />}
       {toast && (
         <div className="toast">
           <Check size={18} />
@@ -472,7 +649,11 @@ function AuthScreen({ onDemo }: { onDemo: () => void }) {
     setBusy(true);
     setMessage("");
     try {
-      const { createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile } = await import("firebase/auth");
+      const {
+        createUserWithEmailAndPassword,
+        signInWithEmailAndPassword,
+        updateProfile,
+      } = await import("firebase/auth");
       const credential = signup
         ? await createUserWithEmailAndPassword(firebaseAuth, email, password)
         : await signInWithEmailAndPassword(firebaseAuth, email, password);
@@ -486,7 +667,9 @@ function AuthScreen({ onDemo }: { onDemo: () => void }) {
         });
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Authentification impossible.");
+      setMessage(
+        error instanceof Error ? error.message : "Authentification impossible.",
+      );
     } finally {
       setBusy(false);
     }
@@ -708,7 +891,10 @@ function MemberHome({
     weeklyLogs.map((log) => new Date(log.completed_at!).getDay()),
   );
   const latest = recentLogs[0];
-  const latestBest = Math.max(0, ...(latest?.set_logs ?? []).map((set) => set.load ?? 0));
+  const latestBest = Math.max(
+    0,
+    ...(latest?.set_logs ?? []).map((set) => set.load ?? 0),
+  );
   return (
     <div className="page">
       <div className="welcome">
@@ -733,8 +919,12 @@ function MemberHome({
           <div className="streak">
             <Flame />
             <div>
-              <b>{weeklyLogs.length} séance{weeklyLogs.length > 1 ? "s" : ""}</b>
-              <small>terminée{weeklyLogs.length > 1 ? "s" : ""} cette semaine</small>
+              <b>
+                {weeklyLogs.length} séance{weeklyLogs.length > 1 ? "s" : ""}
+              </b>
+              <small>
+                terminée{weeklyLogs.length > 1 ? "s" : ""} cette semaine
+              </small>
             </div>
           </div>
         </div>
@@ -756,7 +946,11 @@ function MemberHome({
             </span>
             <span>
               <Activity />
-              {workout.exercises.reduce((sum, exercise) => sum + exercise.sets, 0)} séries
+              {workout.exercises.reduce(
+                (sum, exercise) => sum + exercise.sets,
+                0,
+              )}{" "}
+              séries
             </span>
           </div>
           <button className="primary" onClick={start}>
@@ -792,8 +986,14 @@ function MemberHome({
               <span>{weeklyLogs.length}</span>
             </div>
             <div>
-              <b>{weeklyLogs.length ? "Activité enregistrée" : "Aucune séance cette semaine"}</b>
-              <p>Ces données proviennent de vos séances réellement terminées.</p>
+              <b>
+                {weeklyLogs.length
+                  ? "Activité enregistrée"
+                  : "Aucune séance cette semaine"}
+              </b>
+              <p>
+                Ces données proviennent de vos séances réellement terminées.
+              </p>
               <div className="days">
                 {["L", "M", "M", "J", "V", "S", "D"].map((d, i) => (
                   <span
@@ -826,8 +1026,16 @@ function MemberHome({
             </div>
             <div>
               <small>{latest?.workouts?.title ?? "Aucune activité"}</small>
-              <b>{latest ? `${latest.set_logs?.length ?? 0} séries enregistrées` : "Terminez une séance"}</b>
-              <span>{latestBest ? `Charge maximale : ${latestBest} kg` : "Vos résultats apparaîtront ici"}</span>
+              <b>
+                {latest
+                  ? `${latest.set_logs?.length ?? 0} séries enregistrées`
+                  : "Terminez une séance"}
+              </b>
+              <span>
+                {latestBest
+                  ? `Charge maximale : ${latestBest} kg`
+                  : "Vos résultats apparaîtront ici"}
+              </span>
             </div>
             <Sparkles />
           </div>
@@ -894,7 +1102,9 @@ function ImportWorkout({
       setAiParsed(await analyzeWorkoutWithAi(text));
       setFileStatus("Séance structurée par l’IA — vérifiez avant d’ajouter.");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Analyse IA impossible.");
+      setError(
+        caught instanceof Error ? caught.message : "Analyse IA impossible.",
+      );
     } finally {
       setAiBusy(false);
     }
@@ -943,7 +1153,9 @@ function ImportWorkout({
           workSeconds: item.workSeconds ?? undefined,
           blockRest: item.blockRest ?? undefined,
           blockRounds: item.blockRounds ?? undefined,
-          imageUrl: catalogMatch?.images?.[0] ? catalogImage(catalogMatch.images[0]) : undefined,
+          imageUrl: catalogMatch?.images?.[0]
+            ? catalogImage(catalogMatch.images[0])
+            : undefined,
           sourceUrl: catalogMatch ? catalogSource(catalogMatch.id) : undefined,
         });
       });
@@ -955,7 +1167,9 @@ function ImportWorkout({
         position: 1,
         estimated_minutes: 45,
         exercises: workoutExercises,
-        warmup: buildWarmupItems(parsed.exercises.map((item) => item.name).join(" ")),
+        warmup: buildWarmupItems(
+          parsed.exercises.map((item) => item.name).join(" "),
+        ),
         created_at: serverTimestamp(),
       });
       setBusy(false);
@@ -971,125 +1185,138 @@ function ImportWorkout({
       return;
     } catch (error) {
       setBusy(false);
-      setError(error instanceof Error ? error.message : "Impossible de créer le programme Firebase.");
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Impossible de créer le programme Firebase.",
+      );
       return;
     }
-
   };
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
       <Dialog.Portal>
-      <Dialog.Overlay className="modal-backdrop" />
-      <Dialog.Content className="import-modal" aria-describedby="import-description">
-        <div className="modal-head">
-          <div>
-            <span className="eyebrow">PROGRAMME EXTERNE</span>
-            <Dialog.Title>Importer la séance de votre coach</Dialog.Title>
-          </div>
-          <Dialog.Close asChild><button aria-label="Fermer"><X /></button></Dialog.Close>
-        </div>
-        <Dialog.Description className="modal-intro" id="import-description">
-          Importez le PDF ou la photo reçue de votre coach, ou collez
-          directement son message.
-        </Dialog.Description>
-        <label
-          className={"file-drop " + (processingFile ? "processing" : "")}
-          onDragOver={(event) => event.preventDefault()}
-          onDrop={(event) => {
-            event.preventDefault();
-            void readFile(event.dataTransfer.files[0]);
-          }}
+        <Dialog.Overlay className="modal-backdrop" />
+        <Dialog.Content
+          className="import-modal"
+          aria-describedby="import-description"
         >
-          <input
-            type="file"
-            accept="application/pdf,image/jpeg,image/png,image/webp,text/plain,text/csv,.pdf,.jpg,.jpeg,.png,.webp,.txt,.csv"
-            disabled={processingFile}
-            onChange={(event) => void readFile(event.target.files?.[0])}
-          />
-          <span className="file-icon">
-            <Upload />
-          </span>
-          <div>
-            <b>{fileName || "Déposez le programme ici"}</b>
-            <p>
-              {fileStatus ||
-                "PDF, JPEG, PNG, TXT ou CSV · cliquez pour parcourir"}
-            </p>
+          <div className="modal-head">
+            <div>
+              <span className="eyebrow">PROGRAMME EXTERNE</span>
+              <Dialog.Title>Importer la séance de votre coach</Dialog.Title>
+            </div>
+            <Dialog.Close asChild>
+              <button aria-label="Fermer">
+                <X />
+              </button>
+            </Dialog.Close>
           </div>
-          <span className="file-action">
-            {processingFile ? "Analyse…" : "Choisir"}
-          </span>
-        </label>
-        <div className="import-separator">
-          <span>ou collez le texte</span>
-        </div>
-        <label>
-          Texte de la séance
-          <textarea
-            value={text}
-            onChange={(e) => {
-              setText(e.target.value);
-              setAiParsed(null);
+          <Dialog.Description className="modal-intro" id="import-description">
+            Importez le PDF ou la photo reçue de votre coach, ou collez
+            directement son message.
+          </Dialog.Description>
+          <label
+            className={"file-drop " + (processingFile ? "processing" : "")}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault();
+              void readFile(event.dataTransfer.files[0]);
             }}
-            rows={8}
-          />
-        </label>
-        <button
-          className="ai-analyze"
-          disabled={aiBusy || processingFile || !text.trim()}
-          onClick={() => void analyzeWithAi()}
-        >
-          <Sparkles />
-          {aiBusy ? "L’IA structure la séance…" : "Analyser avec l’IA"}
-        </button>
-        {aiParsed && (
-          <p className="ai-success">
-            <Check /> Analyse IA terminée : {aiParsed.exercises.length} exercices reconnus.
-          </p>
-        )}
-        <div className="parse-summary">
-          <div>
-            <b>{parsed.title}</b>
-            <span>{catalog.length} démonstrations disponibles</span>
-          </div>
-          {parsed.exercises.map((e, index) => {
-            const match = findCatalogExercise(catalog, e.name);
-            return (
-              <div className="parsed-row" key={`${e.name}-${index}`}>
-                {match?.images?.[0] ? (
-                  <img src={catalogImage(match.images[0])} alt="" />
-                ) : (
-                  <span>
-                    <Check />
-                  </span>
-                )}
-                <b>{e.name}</b>
-                {e.method && <em>{e.method}</em>}
-                <small>
-                  {e.sets} × {e.reps}
-                </small>
-                <small>{match ? "Démo associée" : `${e.rest}s repos`}</small>
-              </div>
-            );
-          })}
-        </div>
-        {error && (
-          <div className="data-error">
-            <CircleAlert />
-            {error}
-          </div>
-        )}
-        <div className="modal-actions">
-          <Dialog.Close asChild><button className="secondary">Annuler</button></Dialog.Close>
-          <button
-            className="primary"
-            disabled={busy || !parsed.exercises.length}
-            onClick={save}
           >
-            {busy ? "Import en cours…" : "Ajouter à mes programmes"}
+            <input
+              type="file"
+              accept="application/pdf,image/jpeg,image/png,image/webp,text/plain,text/csv,.pdf,.jpg,.jpeg,.png,.webp,.txt,.csv"
+              disabled={processingFile}
+              onChange={(event) => void readFile(event.target.files?.[0])}
+            />
+            <span className="file-icon">
+              <Upload />
+            </span>
+            <div>
+              <b>{fileName || "Déposez le programme ici"}</b>
+              <p>
+                {fileStatus ||
+                  "PDF, JPEG, PNG, TXT ou CSV · cliquez pour parcourir"}
+              </p>
+            </div>
+            <span className="file-action">
+              {processingFile ? "Analyse…" : "Choisir"}
+            </span>
+          </label>
+          <div className="import-separator">
+            <span>ou collez le texte</span>
+          </div>
+          <label>
+            Texte de la séance
+            <textarea
+              value={text}
+              onChange={(e) => {
+                setText(e.target.value);
+                setAiParsed(null);
+              }}
+              rows={8}
+            />
+          </label>
+          <button
+            className="ai-analyze"
+            disabled={aiBusy || processingFile || !text.trim()}
+            onClick={() => void analyzeWithAi()}
+          >
+            <Sparkles />
+            {aiBusy ? "L’IA structure la séance…" : "Analyser avec l’IA"}
           </button>
-        </div>
-      </Dialog.Content>
+          {aiParsed && (
+            <p className="ai-success">
+              <Check /> Analyse IA terminée : {aiParsed.exercises.length}{" "}
+              exercices reconnus.
+            </p>
+          )}
+          <div className="parse-summary">
+            <div>
+              <b>{parsed.title}</b>
+              <span>{catalog.length} démonstrations disponibles</span>
+            </div>
+            {parsed.exercises.map((e, index) => {
+              const match = findCatalogExercise(catalog, e.name);
+              return (
+                <div className="parsed-row" key={`${e.name}-${index}`}>
+                  {match?.images?.[0] ? (
+                    <img src={catalogImage(match.images[0])} alt="" />
+                  ) : (
+                    <span>
+                      <Check />
+                    </span>
+                  )}
+                  <b>{e.name}</b>
+                  {e.method && <em>{e.method}</em>}
+                  <small>
+                    {e.sets} × {e.reps}
+                  </small>
+                  <small>{match ? "Démo associée" : `${e.rest}s repos`}</small>
+                </div>
+              );
+            })}
+          </div>
+          {error && (
+            <div className="data-error">
+              <CircleAlert />
+              {error}
+            </div>
+          )}
+          <div className="modal-actions">
+            <Dialog.Close asChild>
+              <button className="secondary">Annuler</button>
+            </Dialog.Close>
+            <button
+              className="primary"
+              disabled={busy || !parsed.exercises.length}
+              onClick={save}
+            >
+              {busy ? "Import en cours…" : "Ajouter à mes programmes"}
+            </button>
+          </div>
+        </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
   );
@@ -1107,10 +1334,14 @@ function SessionsPage({
   const [items, setItems] = useState<WorkoutListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState("");
-  const [pendingDelete, setPendingDelete] = useState<WorkoutListItem | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<WorkoutListItem | null>(
+    null,
+  );
   const [editing, setEditing] = useState<WorkoutListItem | null>(null);
   const [editTitle, setEditTitle] = useState("");
-  const [editExercises, setEditExercises] = useState<Array<{ name: string; sets: number; reps: string; rest: number }>>([]);
+  const [editExercises, setEditExercises] = useState<
+    Array<{ name: string; sets: number; reps: string; rest: number }>
+  >([]);
   const [savingEdit, setSavingEdit] = useState(false);
 
   const refresh = async () => {
@@ -1140,38 +1371,63 @@ function SessionsPage({
     try {
       await deleteFirebaseWorkout(item.programId, item.workout.id);
     } catch (error) {
-      notify(error instanceof Error ? error.message : "Suppression impossible.");
+      notify(
+        error instanceof Error ? error.message : "Suppression impossible.",
+      );
       setDeleting("");
       return;
     }
     setDeleting("");
-    setItems((current) => current.filter((row) => row.programId !== item.programId));
+    setItems((current) =>
+      current.filter((row) => row.programId !== item.programId),
+    );
     setPendingDelete(null);
     notify("Séance supprimée");
   };
 
   const saveEdit = async () => {
-    if (!editing || !editTitle.trim() || !editExercises.some((exercise) => exercise.name.trim())) return;
+    if (
+      !editing ||
+      !editTitle.trim() ||
+      !editExercises.some((exercise) => exercise.name.trim())
+    )
+      return;
     setSavingEdit(true);
     try {
-      const exercises = editExercises.filter((exercise) => exercise.name.trim()).map((exercise, position) => ({
-        id: editing.workout.exercises[position]?.id ?? crypto.randomUUID(),
-        name: exercise.name.trim(),
-        position,
-        sets: exercise.sets,
-        reps: exercise.reps,
-        rest: exercise.rest,
-        muscle: editing.workout.exercises[position]?.muscle ?? "Non renseigné",
-        done: 0,
-      }));
+      const exercises = editExercises
+        .filter((exercise) => exercise.name.trim())
+        .map((exercise, position) => ({
+          id: editing.workout.exercises[position]?.id ?? crypto.randomUUID(),
+          name: exercise.name.trim(),
+          position,
+          sets: exercise.sets,
+          reps: exercise.reps,
+          rest: exercise.rest,
+          muscle:
+            editing.workout.exercises[position]?.muscle ?? "Non renseigné",
+          done: 0,
+        }));
       await updateFirebaseWorkout(editing.workout.id, editTitle, exercises);
-      setItems((current) => current.map((item) => item.workout.id === editing.workout.id
-        ? { ...item, workout: { ...item.workout, title: editTitle.trim(), exercises } }
-        : item));
+      setItems((current) =>
+        current.map((item) =>
+          item.workout.id === editing.workout.id
+            ? {
+                ...item,
+                workout: {
+                  ...item.workout,
+                  title: editTitle.trim(),
+                  exercises,
+                },
+              }
+            : item,
+        ),
+      );
       setEditing(null);
       notify("Séance modifiée");
     } catch (error) {
-      notify(error instanceof Error ? error.message : "Modification impossible.");
+      notify(
+        error instanceof Error ? error.message : "Modification impossible.",
+      );
     } finally {
       setSavingEdit(false);
     }
@@ -1190,29 +1446,53 @@ function SessionsPage({
         </button>
       </div>
       {loading ? (
-        <div className="session-list loading-list" aria-label="Chargement des séances">
-          {[1, 2, 3].map((item) => <div className="skeleton-session" key={item}><span /><div><i /><i /><i /></div></div>)}
+        <div
+          className="session-list loading-list"
+          aria-label="Chargement des séances"
+        >
+          {[1, 2, 3].map((item) => (
+            <div className="skeleton-session" key={item}>
+              <span />
+              <div>
+                <i />
+                <i />
+                <i />
+              </div>
+            </div>
+          ))}
         </div>
       ) : items.length === 0 ? (
         <div className="data-empty">
           <Dumbbell />
           <h3>Aucune séance enregistrée</h3>
           <p>Importez le programme de votre coach pour commencer.</p>
-          <button className="primary" onClick={onImport}>Importer une séance</button>
+          <button className="primary" onClick={onImport}>
+            Importer une séance
+          </button>
         </div>
       ) : (
         <div className="session-list">
           {items.map((item) => (
             <article className="session-list-card" key={item.workout.id}>
-              <span className="program-icon"><Dumbbell /></span>
+              <span className="program-icon">
+                <Dumbbell />
+              </span>
               <div>
                 <small>
-                  {new Intl.DateTimeFormat("fr-FR", { dateStyle: "medium" }).format(new Date(item.createdAt))}
+                  {new Intl.DateTimeFormat("fr-FR", {
+                    dateStyle: "medium",
+                  }).format(new Date(item.createdAt))}
                 </small>
                 <h3>{item.workout.title}</h3>
-                <p>{item.workout.exercises.length} exercices · environ {item.workout.duration} min</p>
+                <p>
+                  {item.workout.exercises.length} exercices · environ{" "}
+                  {item.workout.duration} min
+                </p>
               </div>
-              <button className="secondary" onClick={() => onOpen(item.workout)}>
+              <button
+                className="secondary"
+                onClick={() => onOpen(item.workout)}
+              >
                 <Play /> Commencer
               </button>
               <button
@@ -1220,12 +1500,14 @@ function SessionsPage({
                 onClick={() => {
                   setEditing(item);
                   setEditTitle(item.workout.title);
-                  setEditExercises(item.workout.exercises.map((exercise) => ({
-                    name: exercise.name,
-                    sets: exercise.sets,
-                    reps: exercise.reps,
-                    rest: exercise.rest,
-                  })));
+                  setEditExercises(
+                    item.workout.exercises.map((exercise) => ({
+                      name: exercise.name,
+                      sets: exercise.sets,
+                      reps: exercise.reps,
+                      rest: exercise.rest,
+                    })),
+                  );
                 }}
               >
                 Modifier
@@ -1251,7 +1533,8 @@ function SessionsPage({
           <AlertDialog.Content className="confirm-dialog">
             <AlertDialog.Title>Supprimer cette séance ?</AlertDialog.Title>
             <AlertDialog.Description>
-              « {pendingDelete?.workout.title} » sera définitivement supprimée avec toutes ses séries.
+              « {pendingDelete?.workout.title} » sera définitivement supprimée
+              avec toutes ses séries.
             </AlertDialog.Description>
             <div className="modal-actions">
               <AlertDialog.Cancel asChild>
@@ -1260,7 +1543,9 @@ function SessionsPage({
               <AlertDialog.Action asChild>
                 <button
                   className="danger-button"
-                  disabled={!pendingDelete || deleting === pendingDelete.programId}
+                  disabled={
+                    !pendingDelete || deleting === pendingDelete.programId
+                  }
                   onClick={() => pendingDelete && void remove(pendingDelete)}
                 >
                   {deleting ? "Suppression…" : "Supprimer"}
@@ -1270,30 +1555,129 @@ function SessionsPage({
           </AlertDialog.Content>
         </AlertDialog.Portal>
       </AlertDialog.Root>
-      <Dialog.Root open={Boolean(editing)} onOpenChange={(open) => !open && setEditing(null)}>
+      <Dialog.Root
+        open={Boolean(editing)}
+        onOpenChange={(open) => !open && setEditing(null)}
+      >
         <Dialog.Portal>
           <Dialog.Overlay className="modal-backdrop" />
           <Dialog.Content className="confirm-dialog">
             <Dialog.Title>Modifier la séance</Dialog.Title>
             <label>
               Nom de la séance
-              <input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} autoFocus />
+              <input
+                value={editTitle}
+                onChange={(event) => setEditTitle(event.target.value)}
+                autoFocus
+              />
             </label>
             <div className="edit-exercises">
-              <div className="section-title"><h3>Exercices</h3><button className="secondary" type="button" onClick={() => setEditExercises((current) => [...current, { name: "", sets: 3, reps: "10", rest: 90 }])}>+ Ajouter</button></div>
+              <div className="section-title">
+                <h3>Exercices</h3>
+                <button
+                  className="secondary"
+                  type="button"
+                  onClick={() =>
+                    setEditExercises((current) => [
+                      ...current,
+                      { name: "", sets: 3, reps: "10", rest: 90 },
+                    ])
+                  }
+                >
+                  + Ajouter
+                </button>
+              </div>
               {editExercises.map((exercise, index) => (
-                <div className="edit-exercise-row" key={`${editing?.workout.id}-${index}`}>
-                  <input aria-label="Nom de l’exercice" value={exercise.name} placeholder="Nom de l’exercice" onChange={(event) => setEditExercises((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item))} />
-                  <input aria-label="Séries" type="number" min="1" value={exercise.sets} onChange={(event) => setEditExercises((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, sets: Number(event.target.value) } : item))} />
-                  <input aria-label="Répétitions" value={exercise.reps} placeholder="Reps" onChange={(event) => setEditExercises((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, reps: event.target.value } : item))} />
-                  <input aria-label="Repos en secondes" type="number" min="0" value={exercise.rest} onChange={(event) => setEditExercises((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, rest: Number(event.target.value) } : item))} />
-                  <button className="row-delete" type="button" title="Supprimer l’exercice" onClick={() => setEditExercises((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={16} /></button>
+                <div
+                  className="edit-exercise-row"
+                  key={`${editing?.workout.id}-${index}`}
+                >
+                  <input
+                    aria-label="Nom de l’exercice"
+                    value={exercise.name}
+                    placeholder="Nom de l’exercice"
+                    onChange={(event) =>
+                      setEditExercises((current) =>
+                        current.map((item, itemIndex) =>
+                          itemIndex === index
+                            ? { ...item, name: event.target.value }
+                            : item,
+                        ),
+                      )
+                    }
+                  />
+                  <input
+                    aria-label="Séries"
+                    type="number"
+                    min="1"
+                    value={exercise.sets}
+                    onChange={(event) =>
+                      setEditExercises((current) =>
+                        current.map((item, itemIndex) =>
+                          itemIndex === index
+                            ? { ...item, sets: Number(event.target.value) }
+                            : item,
+                        ),
+                      )
+                    }
+                  />
+                  <input
+                    aria-label="Répétitions"
+                    value={exercise.reps}
+                    placeholder="Reps"
+                    onChange={(event) =>
+                      setEditExercises((current) =>
+                        current.map((item, itemIndex) =>
+                          itemIndex === index
+                            ? { ...item, reps: event.target.value }
+                            : item,
+                        ),
+                      )
+                    }
+                  />
+                  <input
+                    aria-label="Repos en secondes"
+                    type="number"
+                    min="0"
+                    value={exercise.rest}
+                    onChange={(event) =>
+                      setEditExercises((current) =>
+                        current.map((item, itemIndex) =>
+                          itemIndex === index
+                            ? { ...item, rest: Number(event.target.value) }
+                            : item,
+                        ),
+                      )
+                    }
+                  />
+                  <button
+                    className="row-delete"
+                    type="button"
+                    title="Supprimer l’exercice"
+                    onClick={() =>
+                      setEditExercises((current) =>
+                        current.filter((_, itemIndex) => itemIndex !== index),
+                      )
+                    }
+                  >
+                    <Trash2 size={16} />
+                  </button>
                 </div>
               ))}
             </div>
             <div className="modal-actions">
-              <Dialog.Close asChild><button className="secondary">Annuler</button></Dialog.Close>
-              <button className="primary" disabled={!editTitle.trim() || !editExercises.some((exercise) => exercise.name.trim()) || savingEdit} onClick={() => void saveEdit()}>
+              <Dialog.Close asChild>
+                <button className="secondary">Annuler</button>
+              </Dialog.Close>
+              <button
+                className="primary"
+                disabled={
+                  !editTitle.trim() ||
+                  !editExercises.some((exercise) => exercise.name.trim()) ||
+                  savingEdit
+                }
+                onClick={() => void saveEdit()}
+              >
                 {savingEdit ? "Enregistrement…" : "Enregistrer"}
               </button>
             </div>
@@ -1306,32 +1690,295 @@ function SessionsPage({
 
 function MovementGuide() {
   const [category, setCategory] = useState("Jambes");
+  const [bodyView, setBodyView] = useState<"homme" | "femme">("homme");
   const [catalog, setCatalog] = useState<CatalogExercise[]>([]);
   const [search, setSearch] = useState("");
   const [catalogPage, setCatalogPage] = useState(1);
-  const [selectedExercise, setSelectedExercise] = useState<CatalogExercise | null>(null);
-  useEffect(() => { fetch("/data/exercises.json").then((response) => response.json()).then(setCatalog).catch(() => setCatalog([])); }, []);
-  const items: Record<string, { title: string; description: string; image?: string }[]> = {
-    Jambes: [{ title: "Squat au poids du corps", description: "Pieds stables, genoux dans l’axe des pieds, descente contrôlée et remontée en poussant dans le sol.", image: "/images/guides/squat-guide.png" }, { title: "Hack squat", description: "Dos maintenu contre le dossier, pieds stables et amplitude contrôlée." }],
-    Dos: [{ title: "Traction", description: "Engagez les omoplates puis tirez la poitrine vers la barre sans balancer." }, { title: "Rowing", description: "Gardez le dos neutre et ramenez les coudes vers l’arrière." }],
-    Pectoraux: [{ title: "Développé couché", description: "Omoplates serrées, pieds stables et trajectoire contrôlée." }],
-    Épaules: [{ title: "Élévations latérales", description: "Bras légèrement fléchis, mouvement contrôlé et épaules détendues." }],
-    Bras: [{ title: "Curl biceps", description: "Coudes proches du corps, sans élan, descente contrôlée." }],
-    Abdominaux: [{ title: "Gainage", description: "Corps aligné, bassin neutre et respiration régulière." }],
-    Machines: [{ title: "Réglage d’une machine", description: "Alignez l’axe de rotation de la machine avec l’articulation travaillée." }],
+  const [selectedExercise, setSelectedExercise] =
+    useState<CatalogExercise | null>(null);
+  useEffect(() => {
+    fetch("/data/exercises.json")
+      .then((response) => response.json())
+      .then(setCatalog)
+      .catch(() => setCatalog([]));
+  }, []);
+  const items: Record<
+    string,
+    { title: string; description: string; image?: string }[]
+  > = {
+    Jambes: [
+      {
+        title: "Squat au poids du corps",
+        description:
+          "Pieds stables, genoux dans l’axe des pieds, descente contrôlée et remontée en poussant dans le sol.",
+        image: "/images/guides/squat-guide.png",
+      },
+      {
+        title: "Hack squat",
+        description:
+          "Dos maintenu contre le dossier, pieds stables et amplitude contrôlée.",
+      },
+    ],
+    Dos: [
+      {
+        title: "Traction",
+        description:
+          "Engagez les omoplates puis tirez la poitrine vers la barre sans balancer.",
+      },
+      {
+        title: "Rowing",
+        description:
+          "Gardez le dos neutre et ramenez les coudes vers l’arrière.",
+      },
+    ],
+    Pectoraux: [
+      {
+        title: "Développé couché",
+        description:
+          "Omoplates serrées, pieds stables et trajectoire contrôlée.",
+      },
+    ],
+    Épaules: [
+      {
+        title: "Élévations latérales",
+        description:
+          "Bras légèrement fléchis, mouvement contrôlé et épaules détendues.",
+      },
+    ],
+    Bras: [
+      {
+        title: "Curl biceps",
+        description: "Coudes proches du corps, sans élan, descente contrôlée.",
+      },
+    ],
+    Abdominaux: [
+      {
+        title: "Gainage",
+        description: "Corps aligné, bassin neutre et respiration régulière.",
+      },
+    ],
+    Machines: [
+      {
+        title: "Réglage d’une machine",
+        description:
+          "Alignez l’axe de rotation de la machine avec l’articulation travaillée.",
+      },
+    ],
   };
-  const filtered = catalog.filter((item) => item.name.toLowerCase().includes(search.toLowerCase()));
+  const filtered = catalog.filter((item) =>
+    item.name.toLowerCase().includes(search.toLowerCase()),
+  );
   const pageSize = 20;
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
-  const visible = filtered.slice((catalogPage - 1) * pageSize, catalogPage * pageSize);
-  const changeSearch = (value: string) => { setSearch(value); setCatalogPage(1); };
-  return <div className="page tools-page"><PageTitle eyebrow="BIBLIOTHÈQUE" title="Guide des mouvements" text="Comprenez chaque exercice avant de le pratiquer." /><div className="guide-category-tabs">{Object.keys(items).map((name) => <button type="button" className={category === name ? "selected" : ""} onClick={() => setCategory(name)} key={name}>{name}</button>)}</div><div className="movement-guide-grid">{items[category].map((item) => <article className="movement-guide-card" key={item.title}><div><h3>{item.title}</h3><p>{item.description}</p><div className="guide-points"><span><b>Installation</b> Position stable et amplitude adaptée.</span><span><b>Exécution</b> Mouvement lent et contrôlé.</span><span><b>Sécurité</b> Arrêtez en cas de douleur inhabituelle.</span></div></div>{item.image ? <img src={item.image} alt={`Illustration ${item.title}`} /> : <div className="guide-placeholder"><Dumbbell /></div>}</article>)}</div><section className="catalog-guide"><div className="section-title"><div><span className="eyebrow">CATALOGUE COMPLET</span><h2>Tous les exercices</h2></div><span className="count-pill">{catalog.length} mouvements</span></div><input className="guide-search" value={search} onChange={(event) => changeSearch(event.target.value)} placeholder="Rechercher un exercice…" />{visible.map((item) => <button type="button" className="catalog-guide-row" key={item.id} onClick={(event) => { event.preventDefault(); setSelectedExercise(item); }}><div><b>{item.name}</b><small>{item.primaryMuscles?.join(" · ") || "Muscles à préciser"} · {item.equipment || "Matériel libre"}</small></div><span>Voir la fiche <ChevronRight size={15} /></span></button>)}<div className="catalog-pagination"><button type="button" disabled={catalogPage === 1} onClick={() => setCatalogPage((page) => page - 1)}>Précédent</button>{Array.from({ length: pageCount }, (_, index) => index + 1).map((page) => <button type="button" className={page === catalogPage ? "selected" : ""} onClick={() => setCatalogPage(page)} key={page}>{page}</button>)}<button type="button" disabled={catalogPage === pageCount} onClick={() => setCatalogPage((page) => page + 1)}>Suivant</button></div></section>{selectedExercise && <Dialog.Root open onOpenChange={(open) => !open && setSelectedExercise(null)}><Dialog.Portal><Dialog.Overlay className="modal-backdrop" /><Dialog.Content className="exercise-guide-dialog"><Dialog.Title>{selectedExercise.name}</Dialog.Title><div className="exercise-guide-meta"><span>{selectedExercise.equipment || "Matériel libre"}</span><span>{selectedExercise.primaryMuscles?.join(" · ") || "Muscles à préciser"}</span></div><div className="exercise-guide-images">{selectedExercise.images?.slice(0, 2).map((image, index) => <figure key={image}><img src={catalogImage(image)} alt={`${selectedExercise.name} — ${index === 0 ? "position de départ" : "position de fin"}`} /><figcaption>{index === 0 ? "Position de départ" : "Position de fin"}</figcaption></figure>)}</div>{selectedExercise.instructions?.length ? <ol>{selectedExercise.instructions.map((instruction, index) => <li key={`${selectedExercise.id}-${index}`}>{instruction}</li>)}</ol> : <p>Les consignes détaillées seront ajoutées prochainement.</p>}<button type="button" className="primary wide" onClick={() => setSelectedExercise(null)}>Fermer</button></Dialog.Content></Dialog.Portal></Dialog.Root>}</div>;
+  const visible = filtered.slice(
+    (catalogPage - 1) * pageSize,
+    catalogPage * pageSize,
+  );
+  const changeSearch = (value: string) => {
+    setSearch(value);
+    setCatalogPage(1);
+  };
+  return (
+    <div className="page tools-page">
+      <PageTitle
+        eyebrow="BIBLIOTHÈQUE"
+        title="Guide des mouvements"
+        text="Comprenez chaque exercice avant de le pratiquer."
+      />
+      <section className="muscle-groups-card">
+        <div>
+          <span className="eyebrow">ANATOMIE</span>
+          <h2>Principaux groupes musculaires</h2>
+          <p>Repérez les zones principalement sollicitées avant de choisir un exercice.</p>
+          <div className="body-view-toggle" role="group" aria-label="Choisir la représentation anatomique">
+            <button type="button" className={bodyView === "homme" ? "selected" : ""} onClick={() => setBodyView("homme")}>Homme</button>
+            <button type="button" className={bodyView === "femme" ? "selected" : ""} onClick={() => setBodyView("femme")}>Femme</button>
+          </div>
+        </div>
+        <div className="muscle-groups-images">
+          <figure className={bodyView === "homme" ? "active" : "hidden"}>
+            <img src="/images/guides/muscle-groups.png" alt="Schéma original des principaux groupes musculaires chez l’homme, vues avant et arrière" />
+            <figcaption>Homme</figcaption>
+          </figure>
+          <figure className={bodyView === "femme" ? "active" : "hidden"}>
+            <img src="/images/guides/muscle-groups-female.png" alt="Schéma original des principaux groupes musculaires chez la femme, vues avant et arrière" />
+            <figcaption>Femme</figcaption>
+          </figure>
+        </div>
+      </section>
+      <div className="guide-category-tabs">
+        {Object.keys(items).map((name) => (
+          <button
+            type="button"
+            className={category === name ? "selected" : ""}
+            onClick={() => setCategory(name)}
+            key={name}
+          >
+            {name}
+          </button>
+        ))}
+      </div>
+      <div className="movement-guide-grid">
+        {items[category].map((item) => (
+          <article className="movement-guide-card" key={item.title}>
+            <div>
+              <h3>{item.title}</h3>
+              <p>{item.description}</p>
+              <div className="guide-points">
+                <span>
+                  <b>Installation</b> Position stable et amplitude adaptée.
+                </span>
+                <span>
+                  <b>Exécution</b> Mouvement lent et contrôlé.
+                </span>
+                <span>
+                  <b>Sécurité</b> Arrêtez en cas de douleur inhabituelle.
+                </span>
+              </div>
+            </div>
+            {item.image ? (
+              <img src={item.image} alt={`Illustration ${item.title}`} />
+            ) : (
+              <div className="guide-placeholder">
+                <Dumbbell />
+              </div>
+            )}
+          </article>
+        ))}
+      </div>
+      <section className="catalog-guide">
+        <div className="section-title">
+          <div>
+            <span className="eyebrow">CATALOGUE COMPLET</span>
+            <h2>Tous les exercices</h2>
+          </div>
+          <span className="count-pill">{catalog.length} mouvements</span>
+        </div>
+        <input
+          className="guide-search"
+          value={search}
+          onChange={(event) => changeSearch(event.target.value)}
+          placeholder="Rechercher un exercice…"
+        />
+        {visible.map((item) => (
+          <button
+            type="button"
+            className="catalog-guide-row"
+            key={item.id}
+            onClick={(event) => {
+              event.preventDefault();
+              setSelectedExercise(item);
+            }}
+          >
+            <div>
+              <b>{item.name}</b>
+              <small>
+                {item.primaryMuscles?.map((muscle) => frenchLabel(muscle, frenchMuscles, muscle)).join(" · ") || "Muscles à préciser"} ·{" "}
+                {frenchLabel(item.equipment, frenchEquipment, "Matériel libre")}
+              </small>
+            </div>
+            <span>
+              Voir la fiche <ChevronRight size={15} />
+            </span>
+          </button>
+        ))}
+        <div className="catalog-pagination">
+          <button
+            type="button"
+            disabled={catalogPage === 1}
+            onClick={() => setCatalogPage((page) => page - 1)}
+          >
+            Précédent
+          </button>
+          {Array.from({ length: pageCount }, (_, index) => index + 1).map(
+            (page) => (
+              <button
+                type="button"
+                className={page === catalogPage ? "selected" : ""}
+                onClick={() => setCatalogPage(page)}
+                key={page}
+              >
+                {page}
+              </button>
+            ),
+          )}
+          <button
+            type="button"
+            disabled={catalogPage === pageCount}
+            onClick={() => setCatalogPage((page) => page + 1)}
+          >
+            Suivant
+          </button>
+        </div>
+      </section>
+      {selectedExercise && (
+        <Dialog.Root
+          open
+          onOpenChange={(open) => !open && setSelectedExercise(null)}
+        >
+          <Dialog.Portal>
+            <Dialog.Overlay className="modal-backdrop" />
+            <Dialog.Content className="exercise-guide-dialog">
+              <Dialog.Title>{selectedExercise.name}</Dialog.Title>
+              <div className="exercise-guide-meta">
+                  <span>{frenchLabel(selectedExercise.equipment, frenchEquipment, "Matériel libre")}</span>
+              </div>
+              <section className="guide-muscles">
+                <h3>Muscles sollicités</h3>
+                <div className="exercise-guide-meta">
+                  {(selectedExercise.primaryMuscles ?? []).map((muscle) => (
+                    <span key={`primary-${muscle}`}>{frenchLabel(muscle, frenchMuscles, muscle)} · principal</span>
+                  ))}
+                  {(selectedExercise.secondaryMuscles ?? []).map((muscle) => (
+                    <span key={`secondary-${muscle}`}>{frenchLabel(muscle, frenchMuscles, muscle)} · secondaire</span>
+                  ))}
+                </div>
+              </section>
+              <div className="exercise-guide-images">
+                {selectedExercise.images?.slice(0, 2).map((image, index) => (
+                  <figure key={image}>
+                    <img
+                      src={catalogImage(image)}
+                      alt={`${selectedExercise.name} — ${index === 0 ? "position de départ" : "position de fin"}`}
+                    />
+                    <figcaption>
+                      {index === 0 ? "Position de départ" : "Position de fin"}
+                    </figcaption>
+                  </figure>
+                ))}
+              </div>
+                <ol>
+                  {frenchGuideInstructions(selectedExercise).map((instruction, index) => (
+                    <li key={`${selectedExercise.id}-fr-${index}`}>{instruction}</li>
+                  ))}
+                </ol>
+              <button
+                type="button"
+                className="primary wide"
+                onClick={() => setSelectedExercise(null)}
+              >
+                Fermer
+              </button>
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
+      )}
+    </div>
+  );
 }
 
 type TimerMode = "EMOM" | "AMRAP" | "Tabata" | "Intervalles" | "Circuit";
-type ToolPreset = { mode: TimerMode; work: number; rest: number; rounds: number };
+type ToolPreset = {
+  mode: TimerMode;
+  work: number;
+  rest: number;
+  rounds: number;
+};
 
-const timerPresets: Record<TimerMode, { work: number; rest: number; rounds: number }> = {
+const timerPresets: Record<
+  TimerMode,
+  { work: number; rest: number; rounds: number }
+> = {
   EMOM: { work: 60, rest: 0, rounds: 10 },
   AMRAP: { work: 600, rest: 0, rounds: 1 },
   Tabata: { work: 20, rest: 10, rounds: 8 },
@@ -1388,7 +2035,11 @@ function WorkoutTools({ initial = null }: { initial?: ToolPreset | null }) {
     const timer = window.setInterval(() => {
       setRemaining((current) => {
         if (current > 1) return current - 1;
-        if (mode === "AMRAP" || (round >= rounds && (phase === "work" && rest === 0 || phase === "rest"))) {
+        if (
+          mode === "AMRAP" ||
+          (round >= rounds &&
+            ((phase === "work" && rest === 0) || phase === "rest"))
+        ) {
           setRunning(false);
           setPhase("done");
           return 0;
@@ -1413,58 +2064,215 @@ function WorkoutTools({ initial = null }: { initial?: ToolPreset | null }) {
   const minutes = Math.floor(remaining / 60);
   const seconds = remaining % 60;
   const [guideCategory, setGuideCategory] = useState("Jambes");
-  const guideItems: Record<string, { title: string; description: string; image?: string }[]> = {
-    Jambes: [{ title: "Squat au poids du corps", description: "Pieds stables, genoux dans l’axe des pieds, descente contrôlée et remontée en poussant dans le sol.", image: "/images/guides/squat-guide.png" }, { title: "Hack squat", description: "Dos maintenu contre le dossier, pieds stables et amplitude contrôlée sans décoller les talons." }],
-    Dos: [{ title: "Traction", description: "Commencez suspendu, engagez les omoplates puis tirez la poitrine vers la barre sans balancer." }, { title: "Rowing", description: "Gardez le dos neutre et ramenez les coudes vers l’arrière en contrôlant le retour." }],
-    Pectoraux: [{ title: "Développé couché", description: "Omoplates serrées, pieds stables et trajectoire contrôlée vers le bas des pectoraux." }],
-    Épaules: [{ title: "Élévations latérales", description: "Bras légèrement fléchis, mouvement contrôlé et épaules détendues." }],
-    Bras: [{ title: "Curl biceps", description: "Coudes proches du corps, évitez l’élan et contrôlez la descente." }],
-    Abdominaux: [{ title: "Gainage", description: "Corps aligné, bassin neutre et respiration régulière sans creuser le bas du dos." }],
-    Machines: [{ title: "Réglage d’une machine", description: "Réglez le siège et les supports pour que l’axe de rotation corresponde à l’articulation travaillée." }],
+  const guideItems: Record<
+    string,
+    { title: string; description: string; image?: string }[]
+  > = {
+    Jambes: [
+      {
+        title: "Squat au poids du corps",
+        description:
+          "Pieds stables, genoux dans l’axe des pieds, descente contrôlée et remontée en poussant dans le sol.",
+        image: "/images/guides/squat-guide.png",
+      },
+      {
+        title: "Hack squat",
+        description:
+          "Dos maintenu contre le dossier, pieds stables et amplitude contrôlée sans décoller les talons.",
+      },
+    ],
+    Dos: [
+      {
+        title: "Traction",
+        description:
+          "Commencez suspendu, engagez les omoplates puis tirez la poitrine vers la barre sans balancer.",
+      },
+      {
+        title: "Rowing",
+        description:
+          "Gardez le dos neutre et ramenez les coudes vers l’arrière en contrôlant le retour.",
+      },
+    ],
+    Pectoraux: [
+      {
+        title: "Développé couché",
+        description:
+          "Omoplates serrées, pieds stables et trajectoire contrôlée vers le bas des pectoraux.",
+      },
+    ],
+    Épaules: [
+      {
+        title: "Élévations latérales",
+        description:
+          "Bras légèrement fléchis, mouvement contrôlé et épaules détendues.",
+      },
+    ],
+    Bras: [
+      {
+        title: "Curl biceps",
+        description:
+          "Coudes proches du corps, évitez l’élan et contrôlez la descente.",
+      },
+    ],
+    Abdominaux: [
+      {
+        title: "Gainage",
+        description:
+          "Corps aligné, bassin neutre et respiration régulière sans creuser le bas du dos.",
+      },
+    ],
+    Machines: [
+      {
+        title: "Réglage d’une machine",
+        description:
+          "Réglez le siège et les supports pour que l’axe de rotation corresponde à l’articulation travaillée.",
+      },
+    ],
   };
 
   return (
     <div className="page tools-page">
-      <PageTitle eyebrow="CHRONOMÈTRES" title="Outils d’entraînement" text="Configurez un format et lancez-le immédiatement." />
+      <PageTitle
+        eyebrow="CHRONOMÈTRES"
+        title="Outils d’entraînement"
+        text="Configurez un format et lancez-le immédiatement."
+      />
       <div className="tool-tabs">
         {(Object.keys(timerPresets) as TimerMode[]).map((name) => (
-          <button className={mode === name ? "selected" : ""} onClick={() => configure(name)} key={name}>{name}</button>
+          <button
+            className={mode === name ? "selected" : ""}
+            onClick={() => configure(name)}
+            key={name}
+          >
+            {name}
+          </button>
         ))}
       </div>
       <div className="tool-layout">
         <section className="timer-card">
-          <span>{phase === "done" ? "TERMINÉ" : phase === "rest" ? "RÉCUPÉRATION" : mode}</span>
-          <b className="timer-display">{String(minutes).padStart(2, "0")}:{String(seconds).padStart(2, "0")}</b>
-          <p>{mode === "AMRAP" ? `${amrapRounds} tours complétés` : `Tour ${round} sur ${rounds}`}</p>
+          <span>
+            {phase === "done"
+              ? "TERMINÉ"
+              : phase === "rest"
+                ? "RÉCUPÉRATION"
+                : mode}
+          </span>
+          <b className="timer-display">
+            {String(minutes).padStart(2, "0")}:
+            {String(seconds).padStart(2, "0")}
+          </b>
+          <p>
+            {mode === "AMRAP"
+              ? `${amrapRounds} tours complétés`
+              : `Tour ${round} sur ${rounds}`}
+          </p>
           <div className="timer-actions">
-            <button className="secondary" onClick={reset}><RotateCcw /> Réinitialiser</button>
-            <button className="primary" disabled={phase === "done"} onClick={() => setRunning((value) => !value)}>
+            <button className="secondary" onClick={reset}>
+              <RotateCcw /> Réinitialiser
+            </button>
+            <button
+              className="primary"
+              disabled={phase === "done"}
+              onClick={() => setRunning((value) => !value)}
+            >
               {running ? "Pause" : "Démarrer"}
             </button>
           </div>
           {mode === "AMRAP" && phase !== "done" && (
-            <button className="lap-button" onClick={() => setAmrapRounds((value) => value + 1)}>+ Tour terminé</button>
+            <button
+              className="lap-button"
+              onClick={() => setAmrapRounds((value) => value + 1)}
+            >
+              + Tour terminé
+            </button>
           )}
         </section>
         <section className="tool-config">
           <h2>Configuration</h2>
-          <label>Travail (secondes)<input type="number" min="1" value={work} disabled={running} onChange={(e) => updateWork(Number(e.target.value))} /></label>
-          {mode !== "AMRAP" && <label>Repos (secondes)<input type="number" min="0" value={rest} disabled={running} onChange={(e) => setRest(Math.max(0, Number(e.target.value)))} /></label>}
-          {mode !== "AMRAP" && <label>Nombre de tours<input type="number" min="1" value={rounds} disabled={running} onChange={(e) => setRounds(Math.max(1, Number(e.target.value)))} /></label>}
-          <p>{mode === "EMOM" ? "Chaque tour commence toutes les minutes." : mode === "AMRAP" ? "Réalisez le maximum de tours avant la fin." : "Alternez automatiquement travail et récupération."}</p>
+          <label>
+            Travail (secondes)
+            <input
+              type="number"
+              min="1"
+              value={work}
+              disabled={running}
+              onChange={(e) => updateWork(Number(e.target.value))}
+            />
+          </label>
+          {mode !== "AMRAP" && (
+            <label>
+              Repos (secondes)
+              <input
+                type="number"
+                min="0"
+                value={rest}
+                disabled={running}
+                onChange={(e) => setRest(Math.max(0, Number(e.target.value)))}
+              />
+            </label>
+          )}
+          {mode !== "AMRAP" && (
+            <label>
+              Nombre de tours
+              <input
+                type="number"
+                min="1"
+                value={rounds}
+                disabled={running}
+                onChange={(e) => setRounds(Math.max(1, Number(e.target.value)))}
+              />
+            </label>
+          )}
+          <p>
+            {mode === "EMOM"
+              ? "Chaque tour commence toutes les minutes."
+              : mode === "AMRAP"
+                ? "Réalisez le maximum de tours avant la fin."
+                : "Alternez automatiquement travail et récupération."}
+          </p>
         </section>
       </div>
       <section className="movement-library">
         <span className="eyebrow">GUIDE DES MOUVEMENTS</span>
         <h2>Bibliothèque d’exercices</h2>
         <div className="guide-category-tabs">
-          {Object.keys(guideItems).map((category) => <button className={guideCategory === category ? "selected" : ""} onClick={() => setGuideCategory(category)} key={category}>{category}</button>)}
+          {Object.keys(guideItems).map((category) => (
+            <button
+              className={guideCategory === category ? "selected" : ""}
+              onClick={() => setGuideCategory(category)}
+              key={category}
+            >
+              {category}
+            </button>
+          ))}
         </div>
         <div className="movement-guide-grid">
-          {guideItems[guideCategory].map((guide) => <article className="movement-guide-card" key={guide.title}>
-            <div><h3>{guide.title}</h3><p>{guide.description}</p><div className="guide-points"><span><b>Installation</b> Position stable et amplitude adaptée.</span><span><b>Exécution</b> Mouvement lent et contrôlé.</span><span><b>Sécurité</b> Arrêtez en cas de douleur inhabituelle.</span></div></div>
-            {guide.image ? <img src={guide.image} alt={`Illustration ${guide.title}`} /> : <div className="guide-placeholder"><Dumbbell /></div>}
-          </article>)}
+          {guideItems[guideCategory].map((guide) => (
+            <article className="movement-guide-card" key={guide.title}>
+              <div>
+                <h3>{guide.title}</h3>
+                <p>{guide.description}</p>
+                <div className="guide-points">
+                  <span>
+                    <b>Installation</b> Position stable et amplitude adaptée.
+                  </span>
+                  <span>
+                    <b>Exécution</b> Mouvement lent et contrôlé.
+                  </span>
+                  <span>
+                    <b>Sécurité</b> Arrêtez en cas de douleur inhabituelle.
+                  </span>
+                </div>
+              </div>
+              {guide.image ? (
+                <img src={guide.image} alt={`Illustration ${guide.title}`} />
+              ) : (
+                <div className="guide-placeholder">
+                  <Dumbbell />
+                </div>
+              )}
+            </article>
+          ))}
         </div>
       </section>
     </div>
@@ -1547,11 +2355,14 @@ function WorkoutScreen({
     if (index >= exercise.done) return "À faire";
     const performed = exercise.performed?.[index];
     if (!performed) return "Conforme";
-    const plannedLoad = Number.parseFloat(exercise.load?.replace(" kg", "") ?? "") || 0;
+    const plannedLoad =
+      Number.parseFloat(exercise.load?.replace(" kg", "") ?? "") || 0;
     const actualLoad = Number.parseFloat(performed.load) || 0;
     const plannedReps = Number.parseInt(exercise.reps, 10) || 0;
     const actualReps = Number.parseInt(performed.reps, 10) || 0;
-    return actualLoad < plannedLoad || actualReps < plannedReps ? "Adaptée" : "Conforme";
+    return actualLoad < plannedLoad || actualReps < plannedReps
+      ? "Adaptée"
+      : "Conforme";
   };
   return (
     <div className="page workout-page">
@@ -1570,7 +2381,10 @@ function WorkoutScreen({
               <small>{paused ? "CHRONO EN PAUSE" : "TEMPS ÉCOULÉ"}</small>
               <b>{elapsed}</b>
             </div>
-            <button className="secondary timer-toggle" onClick={() => setPaused((value) => !value)}>
+            <button
+              className="secondary timer-toggle"
+              onClick={() => setPaused((value) => !value)}
+            >
               {paused ? "Reprendre" : "Pause"}
             </button>
           </div>
@@ -1581,7 +2395,9 @@ function WorkoutScreen({
           <div className="preview-top">
             <div>
               <h2>{workout.exercises.length} exercices</h2>
-              <p>{total} {progressUnit} au total</p>
+              <p>
+                {total} {progressUnit} au total
+              </p>
             </div>
             <span>
               <Clock3 />≈ {workout.duration} min
@@ -1609,7 +2425,10 @@ function WorkoutScreen({
                 <b>
                   {e.sets} × {e.reps}
                 </b>
-                    <small>{e.load ?? (isBodyweightExercise(e.name) ? "PDC" : "Charge libre")}</small>
+                <small>
+                  {e.load ??
+                    (isBodyweightExercise(e.name) ? "PDC" : "Charge libre")}
+                </small>
               </div>
               <div>
                 <small>Repos</small>
@@ -1619,7 +2438,13 @@ function WorkoutScreen({
             </div>
           ))}
           <WarmupPlan workout={workout} />
-          <button className="primary wide" onClick={() => { setPaused(false); setActive(true); }}>
+          <button
+            className="primary wide"
+            onClick={() => {
+              setPaused(false);
+              setActive(true);
+            }}
+          >
             <Play fill="currentColor" />
             Démarrer
           </button>
@@ -1659,13 +2484,21 @@ function WorkoutScreen({
                   <div>
                     <small>EXERCICE {i + 1}</small>
                     <h3>{e.name}</h3>
-                    {e.method && <span className="method-badge">{e.method}</span>}
-                    {e.notes && <p className="live-note">{e.notes}</p>}
-                    {e.blockType && workout.exercises.findIndex((item) => item.blockKey === e.blockKey) === i && (
-                      <button className="launch-block" onClick={() => onLaunchBlock(e)}>
-                        <TimerReset /> Lancer le bloc {e.blockType}
-                      </button>
+                    {e.method && (
+                      <span className="method-badge">{e.method}</span>
                     )}
+                    {e.notes && <p className="live-note">{e.notes}</p>}
+                    {e.blockType &&
+                      workout.exercises.findIndex(
+                        (item) => item.blockKey === e.blockKey,
+                      ) === i && (
+                        <button
+                          className="launch-block"
+                          onClick={() => onLaunchBlock(e)}
+                        >
+                          <TimerReset /> Lancer le bloc {e.blockType}
+                        </button>
+                      )}
                   </div>
                   <button onClick={() => e.imageUrl && setDemo(e)}>
                     {e.imageUrl ? <Play /> : <MoreHorizontal />}
@@ -1685,12 +2518,16 @@ function WorkoutScreen({
                   >
                     <b>{j + 1}</b>
                     <span>
-                      {e.load ?? (isBodyweightExercise(e.name) ? "PDC" : "—")} × {e.reps}
+                      {e.load ?? (isBodyweightExercise(e.name) ? "PDC" : "—")} ×{" "}
+                      {e.reps}
                     </span>
                     <input
                       inputMode="decimal"
                       value={e.performed?.[j]?.load ?? ""}
-                      placeholder={e.load?.replace(" kg", "") ?? (isBodyweightExercise(e.name) ? "PDC" : "—")}
+                      placeholder={
+                        e.load?.replace(" kg", "") ??
+                        (isBodyweightExercise(e.name) ? "PDC" : "—")
+                      }
                       onChange={(event) =>
                         updateSet(e.id, j, "load", event.target.value)
                       }
@@ -1703,9 +2540,15 @@ function WorkoutScreen({
                         updateSet(e.id, j, "reps", event.target.value)
                       }
                     />
-                    <div className={`set-status ${setStatus(e, j).toLowerCase()}`}>
+                    <div
+                      className={`set-status ${setStatus(e, j).toLowerCase()}`}
+                    >
                       <span>{setStatus(e, j)}</span>
-                      <button disabled={j !== e.done} onClick={() => mark(e.id)} title="Marquer la série comme faite">
+                      <button
+                        disabled={j !== e.done}
+                        onClick={() => mark(e.id)}
+                        title="Marquer la série comme faite"
+                      >
                         <Check />
                       </button>
                     </div>
@@ -1736,11 +2579,21 @@ function WorkoutScreen({
               </div>
             </div>
             {completed === total ? (
-              <div className="workout-complete-message">Toutes les séries sont validées. Séance prête à être enregistrée.</div>
+              <div className="workout-complete-message">
+                Toutes les séries sont validées. Séance prête à être
+                enregistrée.
+              </div>
             ) : (
-              <div className="workout-complete-message">Validez encore {total - completed} série{total - completed > 1 ? "s" : ""} pour terminer.</div>
+              <div className="workout-complete-message">
+                Validez encore {total - completed} série
+                {total - completed > 1 ? "s" : ""} pour terminer.
+              </div>
             )}
-            <button className="primary" disabled={completed !== total} onClick={() => finish(elapsedSeconds)}>
+            <button
+              className="primary"
+              disabled={completed !== total}
+              onClick={() => finish(elapsedSeconds)}
+            >
               {completed === total ? "Terminer la séance" : "Séries restantes"}
             </button>
           </div>
@@ -1752,28 +2605,54 @@ function WorkoutScreen({
 }
 
 function WarmupPlan({ workout }: { workout: Workout }) {
-  const names = workout.exercises.map((exercise) => exercise.name.toLowerCase()).join(" ");
-  const lower = /squat|hack|presse|leg |hip thrust|fessier|mollet|ischio|quadriceps|cuisses/.test(names);
+  const names = workout.exercises
+    .map((exercise) => exercise.name.toLowerCase())
+    .join(" ");
+  const lower =
+    /squat|hack|presse|leg |hip thrust|fessier|mollet|ischio|quadriceps|cuisses/.test(
+      names,
+    );
   const upperPull = /traction|tirage|row|rowing|dos|biceps|curl/.test(names);
-  const focus = lower ? "Bas du corps" : upperPull ? "Dos et tirage" : "Haut du corps";
+  const focus = lower
+    ? "Bas du corps"
+    : upperPull
+      ? "Dos et tirage"
+      : "Haut du corps";
   const exercises = buildWarmupItems(names);
   return (
     <section className="warmup-plan">
       <div className="section-title">
-        <div><span className="eyebrow">AVANT DE COMMENCER</span><h2>Échauffement recommandé</h2></div>
+        <div>
+          <span className="eyebrow">AVANT DE COMMENCER</span>
+          <h2>Échauffement recommandé</h2>
+        </div>
         <span className="count-pill">{focus}</span>
       </div>
-      <p className="muted-copy">Préparez progressivement les articulations et les muscles sollicités, sans vous fatiguer.</p>
+      <p className="muted-copy">
+        Préparez progressivement les articulations et les muscles sollicités,
+        sans vous fatiguer.
+      </p>
       <div className="warmup-list">
-        {exercises.map(([name, detail], index) => <div className="warmup-row" key={`${name}-${index}`}><span>{String(index + 1).padStart(2, "0")}</span><b>{name}</b><small>{detail}</small></div>)}
+        {exercises.map(([name, detail], index) => (
+          <div className="warmup-row" key={`${name}-${index}`}>
+            <span>{String(index + 1).padStart(2, "0")}</span>
+            <b>{name}</b>
+            <small>{detail}</small>
+          </div>
+        ))}
       </div>
-      <p className="warmup-note">Adaptez ou arrêtez l’exercice en cas de douleur inhabituelle.</p>
+      <p className="warmup-note">
+        Adaptez ou arrêtez l’exercice en cas de douleur inhabituelle.
+      </p>
     </section>
   );
 }
 
 function buildWarmupItems(names: string): Array<[string, string]> {
-  const lower = /squat|hack|presse|leg |hip thrust|fessier|mollet|ischio|quadriceps|cuisses/.test(names);
+  const lower =
+    /squat|hack|presse|leg |hip thrust|fessier|mollet|ischio|quadriceps|cuisses/.test(
+      names,
+    );
   const upperPull = /traction|tirage|row|rowing|dos|biceps|curl/.test(names);
   return lower
     ? [
@@ -1782,7 +2661,10 @@ function buildWarmupItems(names: string): Array<[string, string]> {
         ["Squat au poids du corps", "2 × 8 répétitions"],
         ["Glute bridge", "2 × 12 répétitions"],
         ["Marche latérale avec élastique", "2 × 10 par côté"],
-        ["Série de préparation du premier exercice", "à vide, puis 50 % et 70 % de la charge prévue"],
+        [
+          "Série de préparation du premier exercice",
+          "à vide, puis 50 % et 70 % de la charge prévue",
+        ],
       ]
     : upperPull
       ? [
@@ -1790,14 +2672,20 @@ function buildWarmupItems(names: string): Array<[string, string]> {
           ["Cercles d’épaules", "10 vers l’avant et 10 vers l’arrière"],
           ["Band pull-aparts", "2 × 12 répétitions"],
           ["Scapular pull-ups ou tirage élastique", "2 × 8 répétitions"],
-          ["Série de préparation du premier tirage", "charge légère, puis progressive"],
+          [
+            "Série de préparation du premier tirage",
+            "charge légère, puis progressive",
+          ],
         ]
       : [
           ["Vélo ou rameur", "5 min · intensité légère"],
           ["Cercles d’épaules", "10 dans chaque direction"],
           ["Rotations externes avec élastique", "2 × 10 par côté"],
           ["Pompes faciles", "2 × 8 répétitions"],
-          ["Série de préparation du premier exercice", "charge légère, puis progressive"],
+          [
+            "Série de préparation du premier exercice",
+            "charge légère, puis progressive",
+          ],
         ];
 }
 
@@ -1977,8 +2865,19 @@ function Progress() {
           <h2>Historique récent</h2>
         </div>
         {loading ? (
-          <div className="skeleton-history" aria-label="Chargement de l’historique">
-            {[1, 2, 3].map((item) => <div className="skeleton-history-row" key={item}><span /><div><i /><i /></div></div>)}
+          <div
+            className="skeleton-history"
+            aria-label="Chargement de l’historique"
+          >
+            {[1, 2, 3].map((item) => (
+              <div className="skeleton-history-row" key={item}>
+                <span />
+                <div>
+                  <i />
+                  <i />
+                </div>
+              </div>
+            ))}
           </div>
         ) : logs.length === 0 ? (
           <div className="data-empty">
@@ -2001,7 +2900,9 @@ function Progress() {
                       }).format(new Date(log.completed_at))
                     : "Date inconnue"}{" "}
                   · {log.set_logs?.length ?? 0} séries
-                  {log.duration_seconds ? ` · ${Math.floor(log.duration_seconds / 60)} min ${log.duration_seconds % 60}s` : ""}
+                  {log.duration_seconds
+                    ? ` · ${Math.floor(log.duration_seconds / 60)} min ${log.duration_seconds % 60}s`
+                    : ""}
                 </small>
               </div>
               <span>Terminée</span>
@@ -2025,7 +2926,9 @@ type CoachClientView = {
 
 function formatActivityDate(value: string | null) {
   if (!value) return "Aucune activité";
-  return new Intl.DateTimeFormat("fr-FR", { dateStyle: "medium" }).format(new Date(value));
+  return new Intl.DateTimeFormat("fr-FR", { dateStyle: "medium" }).format(
+    new Date(value),
+  );
 }
 
 function useCoachClients() {
@@ -2067,16 +2970,24 @@ function useCoachClients() {
       weekStart.setHours(0, 0, 0, 0);
       setClients(
         (profiles ?? []).map((profile, index) => {
-          const clientLogs = (logs ?? []).filter((log) => log.user_id === profile.id);
+          const clientLogs = (logs ?? []).filter(
+            (log) => log.user_id === profile.id,
+          );
           const name = String(profile.display_name || "Client");
           return {
             id: profile.id,
             name,
-            initials: name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase(),
+            initials: name
+              .split(/\s+/)
+              .map((part) => part[0])
+              .join("")
+              .slice(0, 2)
+              .toUpperCase(),
             color: ["#dff56d", "#d9e8ff", "#ffe3cf", "#eadcff"][index % 4],
             lastActivity: clientLogs[0]?.completed_at ?? null,
             completedThisWeek: clientLogs.filter(
-              (log) => log.completed_at && new Date(log.completed_at) >= weekStart,
+              (log) =>
+                log.completed_at && new Date(log.completed_at) >= weekStart,
             ).length,
           };
         }),
@@ -2110,7 +3021,9 @@ function InviteClientButton({ notify }: { notify: (message: string) => void }) {
       notify(error.message);
       return;
     }
-    setInviteUrl(`${window.location.origin}${window.location.pathname}?invite=${token}`);
+    setInviteUrl(
+      `${window.location.origin}${window.location.pathname}?invite=${token}`,
+    );
   };
   const copy = async () => {
     await navigator.clipboard.writeText(inviteUrl);
@@ -2118,21 +3031,43 @@ function InviteClientButton({ notify }: { notify: (message: string) => void }) {
   };
   return (
     <>
-      <button className="primary" disabled={busy} onClick={() => void createInvite()}>
+      <button
+        className="primary"
+        disabled={busy}
+        onClick={() => void createInvite()}
+      >
         <Plus /> {busy ? "Création…" : "Inviter un client"}
       </button>
-      <Dialog.Root open={Boolean(inviteUrl)} onOpenChange={(open) => !open && setInviteUrl("")}>
+      <Dialog.Root
+        open={Boolean(inviteUrl)}
+        onOpenChange={(open) => !open && setInviteUrl("")}
+      >
         <Dialog.Portal>
           <Dialog.Overlay className="modal-backdrop" />
-          <Dialog.Content className="confirm-dialog invite-dialog" aria-describedby="invite-description">
+          <Dialog.Content
+            className="confirm-dialog invite-dialog"
+            aria-describedby="invite-description"
+          >
             <Dialog.Title>Inviter un client</Dialog.Title>
             <Dialog.Description id="invite-description">
-              Envoyez ce lien à votre client. Il restera valable pendant 7 jours.
+              Envoyez ce lien à votre client. Il restera valable pendant 7
+              jours.
             </Dialog.Description>
-            <label>Lien personnel<input readOnly value={inviteUrl} onFocus={(event) => event.currentTarget.select()} /></label>
+            <label>
+              Lien personnel
+              <input
+                readOnly
+                value={inviteUrl}
+                onFocus={(event) => event.currentTarget.select()}
+              />
+            </label>
             <div className="modal-actions">
-              <Dialog.Close asChild><button className="secondary">Fermer</button></Dialog.Close>
-              <button className="primary" onClick={() => void copy()}>Copier le lien</button>
+              <Dialog.Close asChild>
+                <button className="secondary">Fermer</button>
+              </Dialog.Close>
+              <button className="primary" onClick={() => void copy()}>
+                Copier le lien
+              </button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>
@@ -2163,21 +3098,58 @@ function Coach({
   onSelectProgram: (id: string) => void;
 }) {
   const { clients: coachClients, loading } = useCoachClients();
-  if (screen === "clients") return <Clients notify={notify} onOpen={onSelectClient} />;
+  if (screen === "clients")
+    return <Clients notify={notify} onOpen={onSelectClient} />;
   if (screen === "client-detail" && selectedClientId)
-    return <ClientDetail clientId={selectedClientId} onBack={() => setScreen("clients")} notify={notify} />;
-  if (screen === "programs") return <ProgramsLive notify={notify} onImport={onImport} onOpen={onSelectProgram} />;
+    return (
+      <ClientDetail
+        clientId={selectedClientId}
+        onBack={() => setScreen("clients")}
+        notify={notify}
+      />
+    );
+  if (screen === "programs")
+    return (
+      <ProgramsLive
+        notify={notify}
+        onImport={onImport}
+        onOpen={onSelectProgram}
+      />
+    );
   if (screen === "program-detail" && selectedProgramId)
-    return <ProgramEditor programId={selectedProgramId} onBack={() => setScreen("programs")} notify={notify} />;
+    return (
+      <ProgramEditor
+        programId={selectedProgramId}
+        onBack={() => setScreen("programs")}
+        notify={notify}
+      />
+    );
   if (screen === "progress") return <Progress />;
-  const weeklySessions = coachClients.reduce((sum, client) => sum + client.completedThisWeek, 0);
-  const activeThisWeek = coachClients.filter((client) => client.completedThisWeek > 0).length;
-  const needsAttention = coachClients.filter((client) => !client.lastActivity || Date.now() - new Date(client.lastActivity).getTime() > 7 * 86400000);
+  const weeklySessions = coachClients.reduce(
+    (sum, client) => sum + client.completedThisWeek,
+    0,
+  );
+  const activeThisWeek = coachClients.filter(
+    (client) => client.completedThisWeek > 0,
+  ).length;
+  const needsAttention = coachClients.filter(
+    (client) =>
+      !client.lastActivity ||
+      Date.now() - new Date(client.lastActivity).getTime() > 7 * 86400000,
+  );
   return (
     <div className="page">
       <div className="welcome coach-hero-banner">
         <div>
-          <span className="eyebrow">{new Intl.DateTimeFormat("fr-FR", { weekday: "long", day: "numeric", month: "long" }).format(new Date()).toUpperCase()}</span>
+          <span className="eyebrow">
+            {new Intl.DateTimeFormat("fr-FR", {
+              weekday: "long",
+              day: "numeric",
+              month: "long",
+            })
+              .format(new Date())
+              .toUpperCase()}
+          </span>
           <h1>
             Bonjour {displayName.split(" ")[0]} <span>👋</span>
           </h1>
@@ -2186,13 +3158,21 @@ function Coach({
         <InviteClientButton notify={notify} />
       </div>
       <div className="coach-stats">
-        <Stat label="Clients actifs" value={String(coachClients.length)} note={loading ? "Chargement…" : "Relations Supabase"} />
+        <Stat
+          label="Clients actifs"
+          value={String(coachClients.length)}
+          note={loading ? "Chargement…" : "Relations Supabase"}
+        />
         <Stat
           label="Séances cette semaine"
           value={String(weeklySessions)}
           note="Séances réellement terminées"
         />
-        <Stat label="Actifs cette semaine" value={String(activeThisWeek)} note={`sur ${coachClients.length} clients`} />
+        <Stat
+          label="Actifs cette semaine"
+          value={String(activeThisWeek)}
+          note={`sur ${coachClients.length} clients`}
+        />
       </div>
       <section>
         <div className="section-title">
@@ -2200,10 +3180,18 @@ function Coach({
             <span className="eyebrow">BOÎTE D’ATTENTION</span>
             <h2>À traiter aujourd’hui</h2>
           </div>
-          <span className="count-pill">{needsAttention.length} élément{needsAttention.length > 1 ? "s" : ""}</span>
+          <span className="count-pill">
+            {needsAttention.length} élément
+            {needsAttention.length > 1 ? "s" : ""}
+          </span>
         </div>
         <div className="attention-list">
-          {needsAttention.length === 0 ? <div className="data-empty">Aucune alerte réelle pour le moment.</div> : needsAttention.map((c, i) => (
+          {needsAttention.length === 0 ? (
+            <div className="data-empty">
+              Aucune alerte réelle pour le moment.
+            </div>
+          ) : (
+            needsAttention.map((c, i) => (
               <button
                 className="attention"
                 key={c.id}
@@ -2221,7 +3209,11 @@ function Coach({
                 </span>
                 <div>
                   <b>{c.name}</b>
-                  <p>{c.lastActivity ? "Aucune séance depuis plus de 7 jours" : "Aucune séance enregistrée"}</p>
+                  <p>
+                    {c.lastActivity
+                      ? "Aucune séance depuis plus de 7 jours"
+                      : "Aucune séance enregistrée"}
+                  </p>
                 </div>
                 <span className="attention-action">
                   {i === 0
@@ -2232,7 +3224,8 @@ function Coach({
                   <ChevronRight />
                 </span>
               </button>
-            ))}
+            ))
+          )}
         </div>
       </section>
       <section>
@@ -2254,7 +3247,11 @@ function Coach({
             <span>ÉVOLUTION</span>
           </div>
           {coachClients.map((c) => (
-            <button className="table-row client-table-button" key={c.id} onClick={() => onSelectClient(c.id)}>
+            <button
+              className="table-row client-table-button"
+              key={c.id}
+              onClick={() => onSelectClient(c.id)}
+            >
               <div>
                 <span className="avatar" style={{ background: c.color }}>
                   {c.initials}
@@ -2265,11 +3262,18 @@ function Coach({
               <span>{formatActivityDate(c.lastActivity)}</span>
               <div>
                 <i>
-                  <span style={{ width: c.completedThisWeek ? "100%" : "0%" }} />
+                  <span
+                    style={{ width: c.completedThisWeek ? "100%" : "0%" }}
+                  />
                 </i>
-                <b>{c.completedThisWeek} séance{c.completedThisWeek > 1 ? "s" : ""}</b>
+                <b>
+                  {c.completedThisWeek} séance
+                  {c.completedThisWeek > 1 ? "s" : ""}
+                </b>
               </div>
-              <span className={c.completedThisWeek ? "positive" : "negative"}>{c.completedThisWeek ? "Actif" : "Inactif"}</span>
+              <span className={c.completedThisWeek ? "positive" : "negative"}>
+                {c.completedThisWeek ? "Actif" : "Inactif"}
+              </span>
             </button>
           ))}
         </div>
@@ -2291,7 +3295,11 @@ function ClientDetail({
     id: string;
     starts_on: string;
     active: boolean;
-    programs: { id: string; title: string; workouts: { id: string; title: string }[] } | null;
+    programs: {
+      id: string;
+      title: string;
+      workouts: { id: string; title: string }[];
+    } | null;
   };
   type ClientLog = {
     id: string;
@@ -2313,26 +3321,31 @@ function ClientDetail({
   const load = async () => {
     if (!supabase) return;
     setLoading(true);
-    const [profileResult, assignmentResult, logResult, noteResult] = await Promise.all([
-      supabase.from("profiles").select("display_name").eq("id", clientId).single(),
-      supabase
-        .from("program_assignments")
-        .select("id,starts_on,active,programs(id,title,workouts(id,title))")
-        .eq("client_id", clientId)
-        .order("starts_on", { ascending: false }),
-      supabase
-        .from("workout_logs")
-        .select("id,completed_at,effort,workouts(title),set_logs(load,reps)")
-        .eq("user_id", clientId)
-        .eq("status", "completed")
-        .order("completed_at", { ascending: false })
-        .limit(30),
-      supabase
-        .from("coach_client_notes")
-        .select("id,content,created_at")
-        .eq("client_id", clientId)
-        .order("created_at", { ascending: false }),
-    ]);
+    const [profileResult, assignmentResult, logResult, noteResult] =
+      await Promise.all([
+        supabase
+          .from("profiles")
+          .select("display_name")
+          .eq("id", clientId)
+          .single(),
+        supabase
+          .from("program_assignments")
+          .select("id,starts_on,active,programs(id,title,workouts(id,title))")
+          .eq("client_id", clientId)
+          .order("starts_on", { ascending: false }),
+        supabase
+          .from("workout_logs")
+          .select("id,completed_at,effort,workouts(title),set_logs(load,reps)")
+          .eq("user_id", clientId)
+          .eq("status", "completed")
+          .order("completed_at", { ascending: false })
+          .limit(30),
+        supabase
+          .from("coach_client_notes")
+          .select("id,content,created_at")
+          .eq("client_id", clientId)
+          .order("created_at", { ascending: false }),
+      ]);
     setName(profileResult.data?.display_name ?? "Client");
     setAssignments((assignmentResult.data ?? []) as unknown as Assignment[]);
     setLogs((logResult.data ?? []) as unknown as ClientLog[]);
@@ -2375,7 +3388,9 @@ function ClientDetail({
   };
   const endCoaching = async () => {
     if (!supabase) return;
-    const { error } = await supabase.rpc("end_coaching", { target_client: clientId });
+    const { error } = await supabase.rpc("end_coaching", {
+      target_client: clientId,
+    });
     if (error) {
       notify(error.message);
       return;
@@ -2385,64 +3400,181 @@ function ClientDetail({
     onBack();
   };
   const totalVolume = logs.reduce(
-    (total, log) => total + (log.set_logs ?? []).reduce((sum, set) => sum + (set.load ?? 0) * (set.reps ?? 0), 0),
+    (total, log) =>
+      total +
+      (log.set_logs ?? []).reduce(
+        (sum, set) => sum + (set.load ?? 0) * (set.reps ?? 0),
+        0,
+      ),
     0,
   );
-  const initials = name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
+  const initials = name
+    .split(/\s+/)
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
 
   return (
     <div className="page">
-      <button className="text-button back-button" onClick={onBack}><ArrowLeft /> Retour aux clients</button>
+      <button className="text-button back-button" onClick={onBack}>
+        <ArrowLeft /> Retour aux clients
+      </button>
       <div className="client-detail-head">
         <span className="avatar large">{initials}</span>
-        <div><span className="eyebrow">SUIVI CLIENT</span><h1>{name}</h1><p>{logs.length ? `Dernière séance : ${formatActivityDate(logs[0].completed_at)}` : "Aucune séance terminée"}</p></div>
-        <button className="danger-outline" onClick={() => setConfirmEnd(true)}>Terminer l’accompagnement</button>
+        <div>
+          <span className="eyebrow">SUIVI CLIENT</span>
+          <h1>{name}</h1>
+          <p>
+            {logs.length
+              ? `Dernière séance : ${formatActivityDate(logs[0].completed_at)}`
+              : "Aucune séance terminée"}
+          </p>
+        </div>
+        <button className="danger-outline" onClick={() => setConfirmEnd(true)}>
+          Terminer l’accompagnement
+        </button>
       </div>
-      {loading ? <div className="data-empty">Chargement du suivi…</div> : (
+      {loading ? (
+        <div className="data-empty">Chargement du suivi…</div>
+      ) : (
         <>
           <div className="coach-stats">
-            <Stat label="Séances terminées" value={String(logs.length)} note="30 dernières maximum" />
-            <Stat label="Volume enregistré" value={`${Math.round(totalVolume).toLocaleString("fr-FR")} kg`} note="Charge × répétitions" />
-            <Stat label="Programmes actifs" value={String(assignments.filter((item) => item.active).length)} note="Attribués par le coach" />
+            <Stat
+              label="Séances terminées"
+              value={String(logs.length)}
+              note="30 dernières maximum"
+            />
+            <Stat
+              label="Volume enregistré"
+              value={`${Math.round(totalVolume).toLocaleString("fr-FR")} kg`}
+              note="Charge × répétitions"
+            />
+            <Stat
+              label="Programmes actifs"
+              value={String(assignments.filter((item) => item.active).length)}
+              note="Attribués par le coach"
+            />
           </div>
           <div className="client-detail-grid">
             <section className="detail-card">
               <h2>Programmes attribués</h2>
-              {assignments.length === 0 ? <p className="muted-copy">Aucun programme attribué.</p> : assignments.map((assignment) => (
-                <div className="assignment-row" key={assignment.id}>
-                  <div><b>{assignment.programs?.title ?? "Programme"}</b><small>Depuis le {new Intl.DateTimeFormat("fr-FR").format(new Date(assignment.starts_on))} · {assignment.programs?.workouts?.length ?? 0} séances</small></div>
-                  {assignment.active ? <button onClick={() => void deactivate(assignment.id)}>Désactiver</button> : <span>Inactif</span>}
-                </div>
-              ))}
+              {assignments.length === 0 ? (
+                <p className="muted-copy">Aucun programme attribué.</p>
+              ) : (
+                assignments.map((assignment) => (
+                  <div className="assignment-row" key={assignment.id}>
+                    <div>
+                      <b>{assignment.programs?.title ?? "Programme"}</b>
+                      <small>
+                        Depuis le{" "}
+                        {new Intl.DateTimeFormat("fr-FR").format(
+                          new Date(assignment.starts_on),
+                        )}{" "}
+                        · {assignment.programs?.workouts?.length ?? 0} séances
+                      </small>
+                    </div>
+                    {assignment.active ? (
+                      <button onClick={() => void deactivate(assignment.id)}>
+                        Désactiver
+                      </button>
+                    ) : (
+                      <span>Inactif</span>
+                    )}
+                  </div>
+                ))
+              )}
             </section>
             <section className="detail-card">
               <h2>Notes privées</h2>
-              <textarea rows={4} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Observation, adaptation, point à surveiller…" />
-              <button className="primary" disabled={!note.trim() || savingNote} onClick={() => void addNote()}>{savingNote ? "Enregistrement…" : "Ajouter la note"}</button>
-              <div className="private-notes">{notes.map((item) => <article key={item.id}><p>{item.content}</p><small>{formatActivityDate(item.created_at)}</small></article>)}</div>
+              <textarea
+                rows={4}
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                placeholder="Observation, adaptation, point à surveiller…"
+              />
+              <button
+                className="primary"
+                disabled={!note.trim() || savingNote}
+                onClick={() => void addNote()}
+              >
+                {savingNote ? "Enregistrement…" : "Ajouter la note"}
+              </button>
+              <div className="private-notes">
+                {notes.map((item) => (
+                  <article key={item.id}>
+                    <p>{item.content}</p>
+                    <small>{formatActivityDate(item.created_at)}</small>
+                  </article>
+                ))}
+              </div>
             </section>
           </div>
           <section className="detail-card client-history">
             <h2>Historique récent</h2>
-            {logs.length === 0 ? <p className="muted-copy">Aucune séance terminée.</p> : logs.map((log) => (
-              <div className="history-row" key={log.id}><span className="mini-icon"><Check /></span><div><b>{log.workouts?.title ?? "Séance"}</b><small>{formatActivityDate(log.completed_at)} · {log.set_logs?.length ?? 0} séries</small></div><span>{log.effort ?? "Terminé"}</span></div>
-            ))}
+            {logs.length === 0 ? (
+              <p className="muted-copy">Aucune séance terminée.</p>
+            ) : (
+              logs.map((log) => (
+                <div className="history-row" key={log.id}>
+                  <span className="mini-icon">
+                    <Check />
+                  </span>
+                  <div>
+                    <b>{log.workouts?.title ?? "Séance"}</b>
+                    <small>
+                      {formatActivityDate(log.completed_at)} ·{" "}
+                      {log.set_logs?.length ?? 0} séries
+                    </small>
+                  </div>
+                  <span>{log.effort ?? "Terminé"}</span>
+                </div>
+              ))
+            )}
           </section>
         </>
       )}
       <AlertDialog.Root open={confirmEnd} onOpenChange={setConfirmEnd}>
-        <AlertDialog.Portal><AlertDialog.Overlay className="modal-backdrop" /><AlertDialog.Content className="confirm-dialog"><AlertDialog.Title>Terminer l’accompagnement ?</AlertDialog.Title><AlertDialog.Description>Les programmes actifs seront désactivés et le membre repassera en entraînement autonome.</AlertDialog.Description><div className="modal-actions"><AlertDialog.Cancel asChild><button className="secondary">Annuler</button></AlertDialog.Cancel><button className="danger-button" onClick={() => void endCoaching()}>Confirmer</button></div></AlertDialog.Content></AlertDialog.Portal>
+        <AlertDialog.Portal>
+          <AlertDialog.Overlay className="modal-backdrop" />
+          <AlertDialog.Content className="confirm-dialog">
+            <AlertDialog.Title>Terminer l’accompagnement ?</AlertDialog.Title>
+            <AlertDialog.Description>
+              Les programmes actifs seront désactivés et le membre repassera en
+              entraînement autonome.
+            </AlertDialog.Description>
+            <div className="modal-actions">
+              <AlertDialog.Cancel asChild>
+                <button className="secondary">Annuler</button>
+              </AlertDialog.Cancel>
+              <button
+                className="danger-button"
+                onClick={() => void endCoaching()}
+              >
+                Confirmer
+              </button>
+            </div>
+          </AlertDialog.Content>
+        </AlertDialog.Portal>
       </AlertDialog.Root>
     </div>
   );
 }
 
-function Clients({ notify, onOpen }: { notify: (s: string) => void; onOpen: (id: string) => void }) {
+function Clients({
+  notify,
+  onOpen,
+}: {
+  notify: (s: string) => void;
+  onOpen: (id: string) => void;
+}) {
   const [query, setQuery] = useState("");
   const { clients: coachClients, loading } = useCoachClients();
   const list = useMemo(
     () =>
-      coachClients.filter((c) => c.name.toLowerCase().includes(query.toLowerCase())),
+      coachClients.filter((c) =>
+        c.name.toLowerCase().includes(query.toLowerCase()),
+      ),
     [query, coachClients],
   );
   return (
@@ -2463,45 +3595,63 @@ function Clients({ notify, onOpen }: { notify: (s: string) => void; onOpen: (id:
           placeholder="Rechercher un client…"
         />
       </div>
-      {loading ? <div className="data-empty">Chargement des clients…</div> : list.length === 0 ? <div className="data-empty"><UsersRound /><h3>Aucun client connecté</h3><p>La liste se remplira depuis les relations coach-client Supabase.</p></div> : <div className="client-cards">
-        {list.map((c) => (
-          <article key={c.id}>
-            <div className="client-card-top">
-              <span className="avatar large" style={{ background: c.color }}>
-                {c.initials}
-              </span>
-              <button>
-                <MoreHorizontal />
+      {loading ? (
+        <div className="data-empty">Chargement des clients…</div>
+      ) : list.length === 0 ? (
+        <div className="data-empty">
+          <UsersRound />
+          <h3>Aucun client connecté</h3>
+          <p>
+            La liste se remplira depuis les relations coach-client Supabase.
+          </p>
+        </div>
+      ) : (
+        <div className="client-cards">
+          {list.map((c) => (
+            <article key={c.id}>
+              <div className="client-card-top">
+                <span className="avatar large" style={{ background: c.color }}>
+                  {c.initials}
+                </span>
+                <button>
+                  <MoreHorizontal />
+                </button>
+              </div>
+              <h3>{c.name}</h3>
+              <p>Dernière activité : {formatActivityDate(c.lastActivity)}</p>
+              {(!c.lastActivity ||
+                Date.now() - new Date(c.lastActivity).getTime() >
+                  7 * 86400000) && (
+                <div className="client-alert">
+                  <CircleAlert />
+                  {c.lastActivity
+                    ? "Aucune séance depuis plus de 7 jours"
+                    : "Aucune séance enregistrée"}
+                </div>
+              )}
+              <div className="client-kpis">
+                <div>
+                  <small>Cette semaine</small>
+                  <b>
+                    {c.completedThisWeek} séance
+                    {c.completedThisWeek > 1 ? "s" : ""}
+                  </b>
+                </div>
+                <div>
+                  <small>Statut</small>
+                  <b className={c.completedThisWeek ? "positive" : "negative"}>
+                    {c.completedThisWeek ? "Actif" : "Inactif"}
+                  </b>
+                </div>
+              </div>
+              <button className="secondary" onClick={() => onOpen(c.id)}>
+                Voir le suivi
+                <ChevronRight />
               </button>
-            </div>
-            <h3>{c.name}</h3>
-            <p>Dernière activité : {formatActivityDate(c.lastActivity)}</p>
-            {(!c.lastActivity || Date.now() - new Date(c.lastActivity).getTime() > 7 * 86400000) && (
-              <div className="client-alert">
-                <CircleAlert />
-                {c.lastActivity ? "Aucune séance depuis plus de 7 jours" : "Aucune séance enregistrée"}
-              </div>
-            )}
-            <div className="client-kpis">
-              <div>
-                <small>Cette semaine</small>
-                <b>{c.completedThisWeek} séance{c.completedThisWeek > 1 ? "s" : ""}</b>
-              </div>
-              <div>
-                <small>Statut</small>
-                <b className={c.completedThisWeek ? "positive" : "negative"}>{c.completedThisWeek ? "Actif" : "Inactif"}</b>
-              </div>
-            </div>
-            <button
-              className="secondary"
-              onClick={() => onOpen(c.id)}
-            >
-              Voir le suivi
-              <ChevronRight />
-            </button>
-          </article>
-        ))}
-      </div>}
+            </article>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -2526,7 +3676,9 @@ function AssignProgramButton({
 }) {
   const [open, setOpen] = useState(false);
   const [clientId, setClientId] = useState("");
-  const [startsOn, setStartsOn] = useState(new Date().toISOString().slice(0, 10));
+  const [startsOn, setStartsOn] = useState(
+    new Date().toISOString().slice(0, 10),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const assign = async () => {
@@ -2563,26 +3715,63 @@ function AssignProgramButton({
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Trigger asChild>
-        <button className="primary" disabled={!clients.length} title={!clients.length ? "Invitez d’abord un client" : ""}>
+        <button
+          className="primary"
+          disabled={!clients.length}
+          title={!clients.length ? "Invitez d’abord un client" : ""}
+        >
           <UsersRound /> Attribuer
         </button>
       </Dialog.Trigger>
       <Dialog.Portal>
         <Dialog.Overlay className="modal-backdrop" />
-        <Dialog.Content className="confirm-dialog assignment-dialog" aria-describedby="assignment-description">
+        <Dialog.Content
+          className="confirm-dialog assignment-dialog"
+          aria-describedby="assignment-description"
+        >
           <Dialog.Title>Attribuer « {program.title} »</Dialog.Title>
-          <Dialog.Description id="assignment-description">Le programme apparaîtra dans l’espace du client.</Dialog.Description>
-          <label>Client
-            <select value={clientId} onChange={(event) => setClientId(event.target.value)}>
+          <Dialog.Description id="assignment-description">
+            Le programme apparaîtra dans l’espace du client.
+          </Dialog.Description>
+          <label>
+            Client
+            <select
+              value={clientId}
+              onChange={(event) => setClientId(event.target.value)}
+            >
               <option value="">Choisir un client</option>
-              {clients.map((client) => <option value={client.id} key={client.id}>{client.name}</option>)}
+              {clients.map((client) => (
+                <option value={client.id} key={client.id}>
+                  {client.name}
+                </option>
+              ))}
             </select>
           </label>
-          <label>Date de début<input type="date" value={startsOn} onChange={(event) => setStartsOn(event.target.value)} /></label>
-          {error && <div className="data-error"><CircleAlert />{error}</div>}
+          <label>
+            Date de début
+            <input
+              type="date"
+              value={startsOn}
+              onChange={(event) => setStartsOn(event.target.value)}
+            />
+          </label>
+          {error && (
+            <div className="data-error">
+              <CircleAlert />
+              {error}
+            </div>
+          )}
           <div className="modal-actions">
-            <Dialog.Close asChild><button className="secondary">Annuler</button></Dialog.Close>
-            <button className="primary" disabled={!clientId || busy} onClick={() => void assign()}>{busy ? "Attribution…" : "Confirmer"}</button>
+            <Dialog.Close asChild>
+              <button className="secondary">Annuler</button>
+            </Dialog.Close>
+            <button
+              className="primary"
+              disabled={!clientId || busy}
+              onClick={() => void assign()}
+            >
+              {busy ? "Attribution…" : "Confirmer"}
+            </button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>
@@ -2617,7 +3806,15 @@ type EditorWorkout = {
   workout_exercises: EditorLine[];
 };
 
-function ProgramEditor({ programId, onBack, notify }: { programId: string; onBack: () => void; notify: (message: string) => void }) {
+function ProgramEditor({
+  programId,
+  onBack,
+  notify,
+}: {
+  programId: string;
+  onBack: () => void;
+  notify: (message: string) => void;
+}) {
   const [title, setTitle] = useState("Programme");
   const [workouts, setWorkouts] = useState<EditorWorkout[]>([]);
   const [selectedWorkoutId, setSelectedWorkoutId] = useState("");
@@ -2640,7 +3837,9 @@ function ProgramEditor({ programId, onBack, notify }: { programId: string; onBac
     setLoading(true);
     const { data, error } = await supabase
       .from("programs")
-      .select("id,title,workouts(id,title,position,estimated_minutes,workout_blocks(id,title,block_type,duration_seconds,work_seconds,rest_seconds,rounds),workout_exercises(id,position,sets,reps,rest_seconds,block_id,exercises(name)))")
+      .select(
+        "id,title,workouts(id,title,position,estimated_minutes,workout_blocks(id,title,block_type,duration_seconds,work_seconds,rest_seconds,rounds),workout_exercises(id,position,sets,reps,rest_seconds,block_id,exercises(name)))",
+      )
       .eq("id", programId)
       .single();
     setLoading(false);
@@ -2653,24 +3852,36 @@ function ProgramEditor({ programId, onBack, notify }: { programId: string; onBac
       .map((workout) => ({
         ...workout,
         workout_blocks: [...(workout.workout_blocks ?? [])],
-        workout_exercises: [...(workout.workout_exercises ?? [])].sort((a, b) => a.position - b.position),
+        workout_exercises: [...(workout.workout_exercises ?? [])].sort(
+          (a, b) => a.position - b.position,
+        ),
       }));
     setTitle(data.title);
     setWorkouts(next);
-    setSelectedWorkoutId((current) => current && next.some((item) => item.id === current) ? current : next[0]?.id ?? "");
+    setSelectedWorkoutId((current) =>
+      current && next.some((item) => item.id === current)
+        ? current
+        : (next[0]?.id ?? ""),
+    );
   };
-  useEffect(() => { void load(); }, [programId]);
+  useEffect(() => {
+    void load();
+  }, [programId]);
   const selected = workouts.find((item) => item.id === selectedWorkoutId);
 
   const createWorkout = async () => {
     if (!supabase || !newWorkoutTitle.trim()) return;
     setBusy(true);
-    const { data, error } = await supabase.from("workouts").insert({
-      program_id: programId,
-      title: newWorkoutTitle.trim(),
-      position: workouts.length + 1,
-      estimated_minutes: 45,
-    }).select("id").single();
+    const { data, error } = await supabase
+      .from("workouts")
+      .insert({
+        program_id: programId,
+        title: newWorkoutTitle.trim(),
+        position: workouts.length + 1,
+        estimated_minutes: 45,
+      })
+      .select("id")
+      .single();
     setBusy(false);
     if (error) notify(error.message);
     else {
@@ -2684,9 +3895,17 @@ function ProgramEditor({ programId, onBack, notify }: { programId: string; onBac
     setBusy(true);
     const { data: auth } = await supabase.auth.getUser();
     const slug = slugifyExercise(exerciseName);
-    let { data: exercise } = await supabase.from("exercises").select("id").eq("slug", slug).maybeSingle();
+    let { data: exercise } = await supabase
+      .from("exercises")
+      .select("id")
+      .eq("slug", slug)
+      .maybeSingle();
     if (!exercise) {
-      const created = await supabase.from("exercises").insert({ name: exerciseName.trim(), slug, created_by: auth.user?.id }).select("id").single();
+      const created = await supabase
+        .from("exercises")
+        .insert({ name: exerciseName.trim(), slug, created_by: auth.user?.id })
+        .select("id")
+        .single();
       if (created.error) {
         setBusy(false);
         notify(created.error.message);
@@ -2719,7 +3938,8 @@ function ProgramEditor({ programId, onBack, notify }: { programId: string; onBac
       title: blockTitle.trim(),
       block_type: blockType,
       position: selected.workout_blocks.length + 1,
-      duration_seconds: blockType === "AMRAP" ? blockWork : blockWork * blockRounds,
+      duration_seconds:
+        blockType === "AMRAP" ? blockWork : blockWork * blockRounds,
       work_seconds: blockWork,
       rest_seconds: blockRest,
       rounds: blockRounds,
@@ -2733,43 +3953,263 @@ function ProgramEditor({ programId, onBack, notify }: { programId: string; onBac
   };
   const removeLine = async (lineId: string) => {
     if (!supabase) return;
-    const { error } = await supabase.from("workout_exercises").delete().eq("id", lineId);
+    const { error } = await supabase
+      .from("workout_exercises")
+      .delete()
+      .eq("id", lineId);
     if (error) notify(error.message);
     else void load();
   };
   const moveLine = async (index: number, direction: -1 | 1) => {
     if (!supabase || !selected) return;
     const otherIndex = index + direction;
-    if (otherIndex < 0 || otherIndex >= selected.workout_exercises.length) return;
+    if (otherIndex < 0 || otherIndex >= selected.workout_exercises.length)
+      return;
     const current = selected.workout_exercises[index];
     const other = selected.workout_exercises[otherIndex];
     await Promise.all([
-      supabase.from("workout_exercises").update({ position: other.position }).eq("id", current.id),
-      supabase.from("workout_exercises").update({ position: current.position }).eq("id", other.id),
+      supabase
+        .from("workout_exercises")
+        .update({ position: other.position })
+        .eq("id", current.id),
+      supabase
+        .from("workout_exercises")
+        .update({ position: current.position })
+        .eq("id", other.id),
     ]);
     void load();
   };
 
   return (
     <div className="page program-editor">
-      <button className="text-button back-button" onClick={onBack}><ArrowLeft /> Retour aux programmes</button>
-      <div className="page-actions"><PageTitle eyebrow="ÉDITEUR" title={title} text="Créez les séances et configurez leurs blocs." /></div>
-      <div className="workout-tabs">
-        {workouts.map((workout) => <button className={selectedWorkoutId === workout.id ? "selected" : ""} onClick={() => setSelectedWorkoutId(workout.id)} key={workout.id}>{workout.title}</button>)}
-        <div className="inline-create"><input value={newWorkoutTitle} onChange={(event) => setNewWorkoutTitle(event.target.value)} placeholder="Nouvelle séance" /><button disabled={!newWorkoutTitle.trim() || busy} onClick={() => void createWorkout()}><Plus /></button></div>
+      <button className="text-button back-button" onClick={onBack}>
+        <ArrowLeft /> Retour aux programmes
+      </button>
+      <div className="page-actions">
+        <PageTitle
+          eyebrow="ÉDITEUR"
+          title={title}
+          text="Créez les séances et configurez leurs blocs."
+        />
       </div>
-      {loading ? <div className="data-empty">Chargement de l’éditeur…</div> : !selected ? <div className="data-empty"><Dumbbell /><h3>Créez votre première séance</h3></div> : (
+      <div className="workout-tabs">
+        {workouts.map((workout) => (
+          <button
+            className={selectedWorkoutId === workout.id ? "selected" : ""}
+            onClick={() => setSelectedWorkoutId(workout.id)}
+            key={workout.id}
+          >
+            {workout.title}
+          </button>
+        ))}
+        <div className="inline-create">
+          <input
+            value={newWorkoutTitle}
+            onChange={(event) => setNewWorkoutTitle(event.target.value)}
+            placeholder="Nouvelle séance"
+          />
+          <button
+            disabled={!newWorkoutTitle.trim() || busy}
+            onClick={() => void createWorkout()}
+          >
+            <Plus />
+          </button>
+        </div>
+      </div>
+      {loading ? (
+        <div className="data-empty">Chargement de l’éditeur…</div>
+      ) : !selected ? (
+        <div className="data-empty">
+          <Dumbbell />
+          <h3>Créez votre première séance</h3>
+        </div>
+      ) : (
         <div className="editor-grid">
           <section className="detail-card editor-session">
-            <div className="section-title"><div><span className="eyebrow">SÉANCE</span><h2>{selected.title}</h2></div><span className="count-pill">{selected.workout_exercises.length} exercices</span></div>
-            {selected.workout_exercises.length === 0 ? <p className="muted-copy">Ajoutez des exercices depuis le panneau de droite.</p> : selected.workout_exercises.map((line, index) => {
-              const block = selected.workout_blocks.find((item) => item.id === line.block_id);
-              return <div className="editor-exercise-row" key={line.id}><span>{index + 1}</span><div><b>{line.exercises?.name ?? "Exercice"}</b><small>{line.sets} × {line.reps} · repos {line.rest_seconds}s {block ? `· ${block.title}` : ""}</small></div><button disabled={index === 0} onClick={() => void moveLine(index, -1)}>↑</button><button disabled={index === selected.workout_exercises.length - 1} onClick={() => void moveLine(index, 1)}>↓</button><button className="row-delete" onClick={() => void removeLine(line.id)}><Trash2 /></button></div>;
-            })}
+            <div className="section-title">
+              <div>
+                <span className="eyebrow">SÉANCE</span>
+                <h2>{selected.title}</h2>
+              </div>
+              <span className="count-pill">
+                {selected.workout_exercises.length} exercices
+              </span>
+            </div>
+            {selected.workout_exercises.length === 0 ? (
+              <p className="muted-copy">
+                Ajoutez des exercices depuis le panneau de droite.
+              </p>
+            ) : (
+              selected.workout_exercises.map((line, index) => {
+                const block = selected.workout_blocks.find(
+                  (item) => item.id === line.block_id,
+                );
+                return (
+                  <div className="editor-exercise-row" key={line.id}>
+                    <span>{index + 1}</span>
+                    <div>
+                      <b>{line.exercises?.name ?? "Exercice"}</b>
+                      <small>
+                        {line.sets} × {line.reps} · repos {line.rest_seconds}s{" "}
+                        {block ? `· ${block.title}` : ""}
+                      </small>
+                    </div>
+                    <button
+                      disabled={index === 0}
+                      onClick={() => void moveLine(index, -1)}
+                    >
+                      ↑
+                    </button>
+                    <button
+                      disabled={index === selected.workout_exercises.length - 1}
+                      onClick={() => void moveLine(index, 1)}
+                    >
+                      ↓
+                    </button>
+                    <button
+                      className="row-delete"
+                      onClick={() => void removeLine(line.id)}
+                    >
+                      <Trash2 />
+                    </button>
+                  </div>
+                );
+              })
+            )}
           </section>
           <aside className="editor-sidebar">
-            <section className="detail-card editor-form"><h2>Ajouter un exercice</h2><label>Nom<input value={exerciseName} onChange={(event) => setExerciseName(event.target.value)} placeholder="Développé couché" /></label><div className="triple-fields"><label>Séries<input type="number" min="1" value={sets} onChange={(event) => setSets(Number(event.target.value))} /></label><label>Répétitions<input value={reps} onChange={(event) => setReps(event.target.value)} /></label><label>Repos (s)<input type="number" min="0" value={restSeconds} onChange={(event) => setRestSeconds(Number(event.target.value))} /></label></div><label>Bloc<select value={blockId} onChange={(event) => setBlockId(event.target.value)}><option value="">Aucun bloc</option>{selected.workout_blocks.map((block) => <option value={block.id} key={block.id}>{block.title}</option>)}</select></label><button className="primary" disabled={!exerciseName.trim() || busy} onClick={() => void addExercise()}><Plus /> Ajouter</button></section>
-            <section className="detail-card editor-form"><h2>Créer un bloc</h2><label>Type<select value={blockType} onChange={(event) => { const type = event.target.value as TimerMode; setBlockType(type); setBlockTitle(type); const preset = timerPresets[type]; setBlockWork(preset.work); setBlockRest(preset.rest); setBlockRounds(preset.rounds); }}>{(Object.keys(timerPresets) as TimerMode[]).map((type) => <option key={type}>{type}</option>)}</select></label><label>Nom<input value={blockTitle} onChange={(event) => setBlockTitle(event.target.value)} /></label><div className="triple-fields"><label>Travail<input type="number" min="1" value={blockWork} onChange={(event) => setBlockWork(Number(event.target.value))} /></label><label>Repos<input type="number" min="0" value={blockRest} onChange={(event) => setBlockRest(Number(event.target.value))} /></label><label>Tours<input type="number" min="1" value={blockRounds} onChange={(event) => setBlockRounds(Number(event.target.value))} /></label></div><button className="secondary" disabled={busy} onClick={() => void addBlock()}><TimerReset /> Ajouter le bloc</button></section>
+            <section className="detail-card editor-form">
+              <h2>Ajouter un exercice</h2>
+              <label>
+                Nom
+                <input
+                  value={exerciseName}
+                  onChange={(event) => setExerciseName(event.target.value)}
+                  placeholder="Développé couché"
+                />
+              </label>
+              <div className="triple-fields">
+                <label>
+                  Séries
+                  <input
+                    type="number"
+                    min="1"
+                    value={sets}
+                    onChange={(event) => setSets(Number(event.target.value))}
+                  />
+                </label>
+                <label>
+                  Répétitions
+                  <input
+                    value={reps}
+                    onChange={(event) => setReps(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Repos (s)
+                  <input
+                    type="number"
+                    min="0"
+                    value={restSeconds}
+                    onChange={(event) =>
+                      setRestSeconds(Number(event.target.value))
+                    }
+                  />
+                </label>
+              </div>
+              <label>
+                Bloc
+                <select
+                  value={blockId}
+                  onChange={(event) => setBlockId(event.target.value)}
+                >
+                  <option value="">Aucun bloc</option>
+                  {selected.workout_blocks.map((block) => (
+                    <option value={block.id} key={block.id}>
+                      {block.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                className="primary"
+                disabled={!exerciseName.trim() || busy}
+                onClick={() => void addExercise()}
+              >
+                <Plus /> Ajouter
+              </button>
+            </section>
+            <section className="detail-card editor-form">
+              <h2>Créer un bloc</h2>
+              <label>
+                Type
+                <select
+                  value={blockType}
+                  onChange={(event) => {
+                    const type = event.target.value as TimerMode;
+                    setBlockType(type);
+                    setBlockTitle(type);
+                    const preset = timerPresets[type];
+                    setBlockWork(preset.work);
+                    setBlockRest(preset.rest);
+                    setBlockRounds(preset.rounds);
+                  }}
+                >
+                  {(Object.keys(timerPresets) as TimerMode[]).map((type) => (
+                    <option key={type}>{type}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Nom
+                <input
+                  value={blockTitle}
+                  onChange={(event) => setBlockTitle(event.target.value)}
+                />
+              </label>
+              <div className="triple-fields">
+                <label>
+                  Travail
+                  <input
+                    type="number"
+                    min="1"
+                    value={blockWork}
+                    onChange={(event) =>
+                      setBlockWork(Number(event.target.value))
+                    }
+                  />
+                </label>
+                <label>
+                  Repos
+                  <input
+                    type="number"
+                    min="0"
+                    value={blockRest}
+                    onChange={(event) =>
+                      setBlockRest(Number(event.target.value))
+                    }
+                  />
+                </label>
+                <label>
+                  Tours
+                  <input
+                    type="number"
+                    min="1"
+                    value={blockRounds}
+                    onChange={(event) =>
+                      setBlockRounds(Number(event.target.value))
+                    }
+                  />
+                </label>
+              </div>
+              <button
+                className="secondary"
+                disabled={busy}
+                onClick={() => void addBlock()}
+              >
+                <TimerReset /> Ajouter le bloc
+              </button>
+            </section>
           </aside>
         </div>
       )}
@@ -2777,7 +4217,15 @@ function ProgramEditor({ programId, onBack, notify }: { programId: string; onBac
   );
 }
 
-function ProgramsLive({ notify, onImport, onOpen }: { notify: (s: string) => void; onImport: () => void; onOpen: (id: string) => void }) {
+function ProgramsLive({
+  notify,
+  onImport,
+  onOpen,
+}: {
+  notify: (s: string) => void;
+  onImport: () => void;
+  onOpen: (id: string) => void;
+}) {
   const [items, setItems] = useState<ProgramRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -2787,7 +4235,9 @@ function ProgramsLive({ notify, onImport, onOpen }: { notify: (s: string) => voi
     setLoading(true);
     const { data, error } = await supabase
       .from("programs")
-      .select("id,title,description,duration_weeks,created_at,workouts(id),program_assignments(id)")
+      .select(
+        "id,title,description,duration_weeks,created_at,workouts(id),program_assignments(id)",
+      )
       .order("created_at", { ascending: false });
     setLoading(false);
     if (error) {
@@ -2845,10 +4295,7 @@ function ProgramsLive({ notify, onImport, onOpen }: { notify: (s: string) => voi
             Collez du texte ou déposez un PDF pour créer une séance structurée.
           </p>
         </div>
-        <button
-          className="secondary"
-          onClick={onImport}
-        >
+        <button className="secondary" onClick={onImport}>
           Importer
         </button>
       </div>
@@ -2884,14 +4331,20 @@ function ProgramsLive({ notify, onImport, onOpen }: { notify: (s: string) => voi
               <h3>{p.title}</h3>
               <p>{p.description || "Prêt à recevoir ses premières séances."}</p>
               <div className="program-tags">
-                <span>{p.duration_weeks || 1} semaine{(p.duration_weeks || 1) > 1 ? "s" : ""}</span>
-                <span>{p.workouts?.length ?? 0} séance{(p.workouts?.length ?? 0) > 1 ? "s" : ""}</span>
-                <span>{p.program_assignments?.length ?? 0} client{(p.program_assignments?.length ?? 0) > 1 ? "s" : ""}</span>
+                <span>
+                  {p.duration_weeks || 1} semaine
+                  {(p.duration_weeks || 1) > 1 ? "s" : ""}
+                </span>
+                <span>
+                  {p.workouts?.length ?? 0} séance
+                  {(p.workouts?.length ?? 0) > 1 ? "s" : ""}
+                </span>
+                <span>
+                  {p.program_assignments?.length ?? 0} client
+                  {(p.program_assignments?.length ?? 0) > 1 ? "s" : ""}
+                </span>
               </div>
-              <button
-                className="secondary"
-                onClick={() => onOpen(p.id)}
-              >
+              <button className="secondary" onClick={() => onOpen(p.id)}>
                 Ouvrir l’éditeur
                 <ChevronRight />
               </button>
@@ -3006,10 +4459,20 @@ function Profile({
     if (!supabase || demoMode) return;
     supabase.auth.getUser().then(({ data }) => {
       if (!data.user) return;
-      supabase?.from("profiles").select("avatar_url").eq("id", data.user.id).single().then(({ data: profile }) => setAvatarUrl(profile?.avatar_url ?? ""));
+      supabase
+        ?.from("profiles")
+        .select("avatar_url")
+        .eq("id", data.user.id)
+        .single()
+        .then(({ data: profile }) => setAvatarUrl(profile?.avatar_url ?? ""));
     });
   }, [displayName, email, demoMode]);
-  const initials = name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
+  const initials = name
+    .split(/\s+/)
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
   const saveProfile = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!supabase || demoMode || !name.trim()) return;
@@ -3025,28 +4488,51 @@ function Profile({
       setMessage("Votre session a expiré.");
       return;
     }
-    const profileResult = await supabase.from("profiles").update({ display_name: name.trim(), avatar_url: avatarUrl.trim() || null }).eq("id", auth.user.id);
-    const attributes: { email?: string; password?: string; data: Record<string, unknown> } = {
+    const profileResult = await supabase
+      .from("profiles")
+      .update({
+        display_name: name.trim(),
+        avatar_url: avatarUrl.trim() || null,
+      })
+      .eq("id", auth.user.id);
+    const attributes: {
+      email?: string;
+      password?: string;
+      data: Record<string, unknown>;
+    } = {
       data: { ...auth.user.user_metadata, display_name: name.trim() },
     };
-    if (nextEmail.trim() && nextEmail.trim() !== email) attributes.email = nextEmail.trim();
+    if (nextEmail.trim() && nextEmail.trim() !== email)
+      attributes.email = nextEmail.trim();
     if (password) attributes.password = password;
     const authResult = await supabase.auth.updateUser(attributes);
     setSaving(false);
     if (profileResult.error || authResult.error) {
-      setMessage(profileResult.error?.message ?? authResult.error?.message ?? "Modification impossible.");
+      setMessage(
+        profileResult.error?.message ??
+          authResult.error?.message ??
+          "Modification impossible.",
+      );
       return;
     }
     setPassword("");
-    setMessage(attributes.email ? "Profil enregistré. Confirmez le nouvel e-mail depuis votre boîte de réception." : "Profil enregistré.");
+    setMessage(
+      attributes.email
+        ? "Profil enregistré. Confirmez le nouvel e-mail depuis votre boîte de réception."
+        : "Profil enregistré.",
+    );
   };
   const deleteAccount = async () => {
     if (!supabase || deleteText !== "SUPPRIMER") return;
     setDeleting(true);
-    const { error } = await supabase.functions.invoke("delete-account", { body: {} });
+    const { error } = await supabase.functions.invoke("delete-account", {
+      body: {},
+    });
     if (error) {
       setDeleting(false);
-      setMessage("Suppression impossible. Vérifiez que la fonction delete-account est déployée.");
+      setMessage(
+        "Suppression impossible. Vérifiez que la fonction delete-account est déployée.",
+      );
       return;
     }
     setDeleteOpen(false);
@@ -3062,15 +4548,19 @@ function Profile({
       />
       <section className="settings-card">
         <div className="profile-line">
-          {avatarUrl ? <img className="profile-avatar-image" src={avatarUrl} alt="" /> : <span className="avatar large">{initials}</span>}
+          {avatarUrl ? (
+            <img className="profile-avatar-image" src={avatarUrl} alt="" />
+          ) : (
+            <span className="avatar large">{initials}</span>
+          )}
           <div>
             <b>{displayName}</b>
             <small>
               {isCoach
                 ? "Compte coach"
                 : role === "client"
-                ? "Compte membre accompagné"
-                : "Entraînement autonome"}
+                  ? "Compte membre accompagné"
+                  : "Entraînement autonome"}
             </small>
           </div>
         </div>
@@ -3101,20 +4591,96 @@ function Profile({
         <section className="profile-edit-card">
           <h2>Informations du compte</h2>
           <form onSubmit={saveProfile}>
-            <label>Nom affiché<input value={name} onChange={(event) => setName(event.target.value)} required /></label>
-            <label>Adresse e-mail<input type="email" value={nextEmail} onChange={(event) => setNextEmail(event.target.value)} required /></label>
-            <label>Photo de profil — URL<input type="url" value={avatarUrl} onChange={(event) => setAvatarUrl(event.target.value)} placeholder="https://…" /></label>
-            <label>Nouveau mot de passe<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Laisser vide pour ne pas le changer" minLength={6} /></label>
+            <label>
+              Nom affiché
+              <input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                required
+              />
+            </label>
+            <label>
+              Adresse e-mail
+              <input
+                type="email"
+                value={nextEmail}
+                onChange={(event) => setNextEmail(event.target.value)}
+                required
+              />
+            </label>
+            <label>
+              Photo de profil — URL
+              <input
+                type="url"
+                value={avatarUrl}
+                onChange={(event) => setAvatarUrl(event.target.value)}
+                placeholder="https://…"
+              />
+            </label>
+            <label>
+              Nouveau mot de passe
+              <input
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="Laisser vide pour ne pas le changer"
+                minLength={6}
+              />
+            </label>
             {message && <div className="profile-message">{message}</div>}
-            <button className="primary" disabled={saving || !name.trim()}>{saving ? "Enregistrement…" : "Enregistrer les modifications"}</button>
+            <button className="primary" disabled={saving || !name.trim()}>
+              {saving ? "Enregistrement…" : "Enregistrer les modifications"}
+            </button>
           </form>
         </section>
       )}
       {!demoMode && (
-        <section className="danger-zone"><div><h2>Supprimer mon compte</h2><p>Cette action efface définitivement le compte et ses données.</p></div><button className="danger-outline" onClick={() => setDeleteOpen(true)}>Supprimer mon compte</button></section>
+        <section className="danger-zone">
+          <div>
+            <h2>Supprimer mon compte</h2>
+            <p>Cette action efface définitivement le compte et ses données.</p>
+          </div>
+          <button
+            className="danger-outline"
+            onClick={() => setDeleteOpen(true)}
+          >
+            Supprimer mon compte
+          </button>
+        </section>
       )}
       <AlertDialog.Root open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <AlertDialog.Portal><AlertDialog.Overlay className="modal-backdrop" /><AlertDialog.Content className="confirm-dialog account-delete-dialog"><AlertDialog.Title>Supprimer définitivement le compte ?</AlertDialog.Title><AlertDialog.Description>Programmes, séances, historiques et relations seront supprimés. Cette action est irréversible.</AlertDialog.Description><label>Saisissez SUPPRIMER<input value={deleteText} onChange={(event) => setDeleteText(event.target.value)} autoComplete="off" /></label><div className="modal-actions"><AlertDialog.Cancel asChild><button className="secondary">Annuler</button></AlertDialog.Cancel><button className="danger-button" disabled={deleteText !== "SUPPRIMER" || deleting} onClick={() => void deleteAccount()}>{deleting ? "Suppression…" : "Supprimer définitivement"}</button></div></AlertDialog.Content></AlertDialog.Portal>
+        <AlertDialog.Portal>
+          <AlertDialog.Overlay className="modal-backdrop" />
+          <AlertDialog.Content className="confirm-dialog account-delete-dialog">
+            <AlertDialog.Title>
+              Supprimer définitivement le compte ?
+            </AlertDialog.Title>
+            <AlertDialog.Description>
+              Programmes, séances, historiques et relations seront supprimés.
+              Cette action est irréversible.
+            </AlertDialog.Description>
+            <label>
+              Saisissez SUPPRIMER
+              <input
+                value={deleteText}
+                onChange={(event) => setDeleteText(event.target.value)}
+                autoComplete="off"
+              />
+            </label>
+            <div className="modal-actions">
+              <AlertDialog.Cancel asChild>
+                <button className="secondary">Annuler</button>
+              </AlertDialog.Cancel>
+              <button
+                className="danger-button"
+                disabled={deleteText !== "SUPPRIMER" || deleting}
+                onClick={() => void deleteAccount()}
+              >
+                {deleting ? "Suppression…" : "Supprimer définitivement"}
+              </button>
+            </div>
+          </AlertDialog.Content>
+        </AlertDialog.Portal>
       </AlertDialog.Root>
     </div>
   );
