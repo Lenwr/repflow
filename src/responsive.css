@@ -1,0 +1,81 @@
+/* Shared layout and touch sizing, loaded after component styles. */
+:root { --accent: #dff56d; --accent-dark: #254f42; }
+button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
+button:focus-visible, a:focus-visible { outline: 3px solid #658d78; outline-offset: 3px; }
+input, select, textarea { min-width: 0; max-width: 100%; }
+img { max-width: 100%; }
+.page { width: 100%; }
+.page h1 { font-size: clamp(26px, 3vw, 36px); line-height: 1.18; }
+.page p { line-height: 1.6; }
+.page-title { max-width: 720px; }
+.section-title, .welcome-actions, .meta, .program-tags, .timer-actions { flex-wrap: wrap; }
+.section-title > *, .session-list-card > *, .catalog-guide-row > div,
+.live-title > *, .muscle-groups-card > *, .two-col > * { min-width: 0; }
+.catalog-guide-row b, .live-title h3, .session-list-card h3 { overflow-wrap: anywhere; }
+.primary, .secondary, .body-view-toggle button, .catalog-pagination button { min-height: 44px; }
+.muscle-groups-card { grid-template-columns: minmax(0, .7fr) minmax(0, 1.3fr); }
+.muscle-groups-images { grid-template-columns: minmax(0, 1fr); }
+.muscle-groups-card img { height: auto; max-height: none; }
+.import-modal, .exercise-guide-dialog, .confirm-dialog { max-height: calc(100dvh - 32px); overflow-y: auto; overscroll-behavior: contain; }
+.auth-layout, .auth-panel, .onboarding { min-height: 100svh; }
+.auth-panel form { min-width: 0; }
+.auth-panel input, .auth-panel select { min-height: 48px; }
+.auth-panel label { font-size: 13px; }
+.auth-switch, .demo-link { min-height: 44px; font-size: 13px; }
+
+@media (max-width: 1100px) {
+  .client-cards, .program-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .editor-grid, .tool-layout, .movement-guide-card { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 900px) {
+  main { padding-bottom: 0; }
+  .topbar { height: auto; min-height: 68px; padding: 10px max(12px, env(safe-area-inset-right)) 10px max(12px, env(safe-area-inset-left)); gap: 8px; }
+  .top-actions { gap: 8px; }
+  .mobile-menu-button, .icon-button, .avatar.small { width: 44px; height: 44px; flex-shrink: 0; }
+  .mobile-drawer { overflow-y: auto; overscroll-behavior: contain; padding-top: max(24px, env(safe-area-inset-top)); padding-bottom: max(24px, env(safe-area-inset-bottom)); }
+  .mobile-drawer-head > button { width: 44px; height: 44px; }
+  .page { padding: 28px 20px max(32px, env(safe-area-inset-bottom)); }
+  .auth-panel { padding: 32px 24px; }
+  .muscle-groups-card { grid-template-columns: minmax(0, 1fr); }
+  .toast { bottom: max(16px, env(safe-area-inset-bottom)); }
+}
+@media (max-width: 600px) {
+  input, select, textarea { font-size: 16px; }
+  .page { padding: 24px 16px max(32px, env(safe-area-inset-bottom)); }
+  .auth-panel { padding: 28px 20px !important; }
+  .auth-panel h2 { font-size: 28px; }
+  .onboarding { padding: 16px; align-items: start; }
+  .onboard-card { padding: 24px 20px; }
+  .onboard-card h1 { font-size: clamp(28px, 8vw, 36px); }
+  .role-card { padding: 14px 12px; gap: 10px; }
+  .role-card p { font-size: 13px; line-height: 1.5; }
+  .role-card b { font-size: 15px; }
+  .welcome, .page-actions, .workout-head, .danger-zone { display: flex; flex-direction: column; align-items: stretch; gap: 16px; }
+  .welcome-actions { display: flex; flex-direction: column; align-items: stretch; }
+  .page-actions > .primary, .workout-head .session-time { width: 100%; margin-top: 0; }
+  .client-cards, .program-grid, .two-col, .client-detail-grid { grid-template-columns: minmax(0, 1fr); }
+  .next-copy, .timer-card, .tool-config, .workout-preview, .two-col > section, .chart-card { padding: 20px 16px; }
+  .exercise-live { padding: 0; }
+  .weekly { flex-wrap: wrap; gap: 16px; }
+  .edit-exercise-row { grid-template-columns: repeat(3, minmax(0, 1fr)) 44px; }
+  .edit-exercise-row > :first-child { grid-column: 1 / -1; }
+  .session-list-card { grid-template-columns: 44px minmax(0, 1fr); padding: 16px; gap: 12px; }
+  .session-list-card .secondary, .session-list-card .delete-session { grid-column: auto; grid-row: auto; }
+  .session-list-card .secondary { grid-column: 1 / -1; }
+  .catalog-guide-row { flex-direction: column; gap: 10px; padding-block: 16px; }
+  .catalog-guide-row > span { font-size: 13px; }
+  .catalog-pagination { justify-content: flex-start; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 8px; }
+  .catalog-pagination button { flex-shrink: 0; min-width: 44px; }
+  .import-modal, .exercise-guide-dialog, .confirm-dialog { width: calc(100% - 24px); padding: 20px 16px; max-height: calc(100dvh - 24px); }
+  .modal-actions { flex-wrap: wrap; gap: 10px; }
+  .modal-actions > button { flex: 1 1 120px; }
+  .exercise-guide-images { grid-template-columns: minmax(0, 1fr); }
+  .set-header, .set-row { grid-template-columns: 26px minmax(0, 1fr) 54px 54px 36px; padding-inline: 8px; gap: 4px; }
+  .set-row input { padding-inline: 2px; min-height: 44px; }
+  .set-row button { width: 36px; height: 44px; border-radius: 10px; }
+  .muscle-groups-card { padding: 16px; }
+  .toast { left: 12px; right: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
