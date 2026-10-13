@@ -89,6 +89,17 @@ service cloud.firestore {
       allow create, update, delete: if signedIn() && resource.data.created_by == request.auth.uid;
     }
 
+    match /workout_shares/{shareId} {
+      // Le document n'est accessible qu'avec son identifiant secret contenu dans le lien.
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn()
+        && request.resource.data.owner_id == request.auth.uid
+        && request.resource.data.active == true;
+      allow update, delete: if signedIn()
+        && resource.data.owner_id == request.auth.uid;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

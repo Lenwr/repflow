@@ -2,6 +2,7 @@ export type ImportedExercise = {
   name: string;
   sets: number;
   reps: string;
+  load?: string | null;
   rest: number;
   method?: string;
   notes?: string;
@@ -15,8 +16,18 @@ export type ImportedExercise = {
 
 const clean = (value: string) => value.trim().replace(/^[-•*]\s*/, "");
 
+export function normalizeWorkoutOcr(text: string) {
+  return text
+    // PDF/OCR often extracts 115 kg as "1 | 1 | 5 | kg".
+    .replace(/\b(\d(?:\s*\|\s*\d)+(?:\s*[,.]\s*\d+)?)\s*\|?\s*(kg|kgs)\b/gi, (_, digits: string, unit: string) =>
+      `${digits.replace(/\s*\|\s*/g, "").replace(/\s+/g, "")} ${unit}`,
+    )
+    .replace(/\s*\|\s*[x×]\s*\|\s*/gi, " × ")
+    .replace(/\s*\|\s*/g, " | ");
+}
+
 export function parseWorkoutText(text: string) {
-  const lines = text.split(/\r?\n/).map(clean).filter(Boolean);
+  const lines = normalizeWorkoutOcr(text).split(/\r?\n/).map(clean).filter(Boolean);
   const titleLine = lines.find((line) =>
     /\b(séance|session|workout|jour)\s*\d*/i.test(line),
   );
@@ -40,10 +51,13 @@ export function parseWorkoutText(text: string) {
       /(?:repos|rest)\s*[:=-]?\s*(\d+)\s*(s|sec(?:ondes?)?|min(?:utes?)?)?/i,
     );
     const restValue = restMatch?.[1] ? Number(restMatch[1]) : 90;
+    const loadMatch = line.match(/\b(\d+(?:[.,]\d+)?)\s*kg\b/i);
+    const repsTimesLoad = Boolean(loadMatch && Number(match[3].replace(",", ".")) === Number(loadMatch?.[1].replace(",", ".")));
     exercises.push({
       name: exerciseName.replace(/^.*\|\s*/, ""),
-      sets: Number(match[2]),
-      reps: match[3],
+      sets: repsTimesLoad ? 1 : Number(match[2]),
+      reps: repsTimesLoad ? match[2] : match[3],
+      load: loadMatch ? `${loadMatch[1].replace(",", ".")} kg` : null,
       rest: restMatch?.[2]?.toLowerCase().startsWith("min")
         ? restValue * 60
         : restValue,

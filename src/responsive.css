@@ -60,8 +60,7 @@ img { max-width: 100%; }
   .edit-exercise-row { grid-template-columns: repeat(3, minmax(0, 1fr)) 44px; }
   .edit-exercise-row > :first-child { grid-column: 1 / -1; }
   .session-list-card { grid-template-columns: 44px minmax(0, 1fr); padding: 16px; gap: 12px; }
-  .session-list-card .secondary, .session-list-card .delete-session { grid-column: auto; grid-row: auto; }
-  .session-list-card .secondary { grid-column: 1 / -1; }
+  .session-list-card .secondary, .session-list-card .delete-session { grid-column: 1 / -1; grid-row: auto; width: 100%; }
   .catalog-guide-row { flex-direction: column; gap: 10px; padding-block: 16px; }
   .catalog-guide-row > span { font-size: 13px; }
   .catalog-pagination { justify-content: flex-start; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 8px; }
@@ -74,8 +73,46 @@ img { max-width: 100%; }
   .set-row input { padding-inline: 2px; min-height: 44px; }
   .set-row button { width: 36px; height: 44px; border-radius: 10px; }
   .muscle-groups-card { padding: 16px; }
+  .muscle-filter-result { align-items: flex-start; flex-wrap: wrap; }
+  .muscle-filter-result button { width: 100%; margin-left: 0; padding: 7px 0 0; text-align: left; }
   .toast { left: 12px; right: 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+
+/* Live workout: switch the desktop table to touch-friendly cards. */
+@media (max-width: 900px) {
+  .exercise-stack { gap: 20px; }
+  .exercise-live { border-radius: 18px; box-shadow: 0 8px 24px rgba(23, 61, 52, .06); }
+  .live-title { grid-template-columns: 48px minmax(0, 1fr) 44px; padding: 18px 16px; align-items: start; }
+  .live-title > button:last-child { width: 44px; height: 44px; display: grid; place-items: center; }
+  .set-header { display: none; }
+  .set-row {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      "number planned planned"
+      ". load reps"
+      ". status status";
+    gap: 10px 8px;
+    padding: 16px;
+    align-items: center;
+  }
+  .set-row > b { grid-area: number; align-self: start; padding-top: 2px; font-size: 15px; }
+  .set-row > span { grid-area: planned; font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+  .set-entry { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .set-entry.load-entry { grid-area: load; }
+  .set-entry.reps-entry { grid-area: reps; }
+  .set-entry small { display: block; color: var(--muted); font-size: 10px; font-weight: 700; }
+  .set-row .set-entry input { width: 100%; min-height: 48px; padding: 10px; text-align: left; font-size: 16px; }
+  .set-status { grid-area: status; min-width: 0; justify-content: space-between; padding-top: 2px; }
+  .set-status > span { font-size: 12px; }
+  .set-row .set-status button { width: 48px; height: 48px; border-radius: 12px; }
+  .rest-note { padding: 14px 16px; font-size: 12px; }
+}
+
+@media (min-width: 901px) {
+  .set-entry { display: contents; }
+  .set-entry > small { display: none; }
 }

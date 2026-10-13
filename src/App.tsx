@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { MuscleAtlas, type AtlasItem } from './MuscleAtlas';
 import { onAuthStateChanged, type User } from "firebase/auth";
 import {
   addDoc,
@@ -30,6 +31,7 @@ import {
   Play,
   Plus,
   Search,
+  Share2,
   Settings,
   Sparkles,
   TimerReset,
@@ -66,6 +68,9 @@ import {
   loadNextFirebaseWorkout,
   saveFirebaseWorkout,
   updateFirebaseWorkout,
+  createWorkoutShare,
+  loadWorkoutShare,
+  acceptWorkoutShare,
 } from "./lib/firestoreWorkouts";
 
 type AppSession = { user: User & { user_metadata?: Record<string, unknown> } };
@@ -138,6 +143,62 @@ function frenchGuideInstructions(exercise: CatalogExercise) {
     "Réalisez le mouvement lentement et de manière contrôlée, sans à-coups ni élan.",
     "Respirez régulièrement et arrêtez-vous en cas de douleur inhabituelle. Adaptez l’amplitude et la charge à votre niveau.",
   ];
+}
+
+type MuscleZone =
+  | "pectoraux" | "épaules" | "biceps" | "triceps" | "avant-bras"
+  | "abdominaux" | "dorsaux" | "trapèzes" | "lombaires" | "fessiers"
+  | "quadriceps" | "ischio-jambiers" | "adducteurs" | "mollets";
+
+const muscleZoneLabels: Record<MuscleZone, string> = {
+  pectoraux: "Pectoraux", épaules: "Épaules", biceps: "Biceps",
+  triceps: "Triceps", "avant-bras": "Avant-bras", abdominaux: "Abdominaux",
+  dorsaux: "Dorsaux", trapèzes: "Trapèzes", lombaires: "Lombaires",
+  fessiers: "Fessiers", quadriceps: "Quadriceps",
+  "ischio-jambiers": "Ischio-jambiers", adducteurs: "Adducteurs", mollets: "Mollets",
+};
+
+function normalizeMuscleText(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+function inferExerciseMuscles(exercise: Exercise): { primary: MuscleZone[]; secondary: MuscleZone[] } {
+  const text = normalizeMuscleText(`${exercise.name} ${exercise.muscle}`);
+  const has = (pattern: RegExp) => pattern.test(text);
+  if (has(/squat|presse a cuisse|leg press|leg extension|fente|lunge/))
+    return { primary: ["quadriceps"], secondary: ["fessiers", "adducteurs", "ischio-jambiers"] };
+  if (has(/hip thrust|glute|fessier|abduction/))
+    return { primary: ["fessiers"], secondary: ["ischio-jambiers", "adducteurs"] };
+  if (has(/leg curl|ischio|hamstring|souleve de terre|deadlift/))
+    return { primary: ["ischio-jambiers", "fessiers"], secondary: ["lombaires", "dorsaux"] };
+  if (has(/mollet|calf/)) return { primary: ["mollets"], secondary: [] };
+  if (has(/adduct/)) return { primary: ["adducteurs"], secondary: ["fessiers"] };
+  if (has(/developpe couche|bench press|chest press|ecarte|fly|pompe|push-up|pector/))
+    return { primary: ["pectoraux"], secondary: ["triceps", "épaules"] };
+  if (has(/developpe militaire|shoulder press|overhead press|elevation laterale|lateral raise|epaule|deltoid/))
+    return { primary: ["épaules"], secondary: ["triceps", "trapèzes"] };
+  if (has(/traction|pull-up|chin-up|tirage|rowing|row|dorsal|lat pulldown/))
+    return { primary: ["dorsaux"], secondary: ["biceps", "trapèzes", "avant-bras"] };
+  if (has(/shrug|trapez/)) return { primary: ["trapèzes"], secondary: ["épaules"] };
+  if (has(/curl|biceps/)) return { primary: ["biceps"], secondary: ["avant-bras"] };
+  if (has(/triceps|pushdown|extension.*bras|dips/))
+    return { primary: ["triceps"], secondary: ["pectoraux", "épaules"] };
+  if (has(/avant-bras|forearm|poignet|wrist/)) return { primary: ["avant-bras"], secondary: ["biceps"] };
+  if (has(/abdo|crunch|gainage|plank|sit-up|core/))
+    return { primary: ["abdominaux"], secondary: ["lombaires"] };
+  const direct = (Object.keys(muscleZoneLabels) as MuscleZone[]).find((zone) =>
+    text.includes(normalizeMuscleText(zone)),
+  );
+  return direct ? { primary: [direct], secondary: [] } : { primary: [], secondary: [] };
+}
+
+function WorkoutMuscleMap({ exercises, selected, onSelect }: { exercises: Exercise[]; selected: MuscleZone | null; onSelect: (zone: MuscleZone | null) => void }) {
+  const items: AtlasItem[] = [];
+  for (const zone of Object.keys(muscleZoneLabels) as MuscleZone[]) {
+    const matches = exercises.map(inferExerciseMuscles).filter(m => m.primary.includes(zone) || m.secondary.includes(zone));
+    if (matches.length) items.push({ zone, primary: matches.some(m => m.primary.includes(zone)), count: matches.length });
+  }
+  return <MuscleAtlas items={items} selected={selected} onSelect={onSelect} />;
 }
 
 type Screen =
@@ -603,8 +664,50 @@ function App() {
           }}
         />
       )}
+      {session && new URLSearchParams(window.location.search).get("share") && (
+        <SharedWorkoutInvite
+          userId={session.user.uid}
+          onAccepted={(next) => {
+            setWorkout(next);
+            setActive(false);
+            setScreen("sessions");
+            notify("Séance ajoutée à votre compte");
+          }}
+        />
+      )}
     </div>
   );
+}
+
+function SharedWorkoutInvite({ userId, onAccepted }: { userId: string; onAccepted: (workout: Workout) => void }) {
+  const token = new URLSearchParams(window.location.search).get("share") ?? "";
+  const [shared, setShared] = useState<Workout | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(true);
+  useEffect(() => {
+    if (!token) return;
+    loadWorkoutShare(token).then(setShared).catch((reason) => setError(reason instanceof Error ? reason.message : "Partage indisponible."));
+  }, [token]);
+  const close = () => {
+    setOpen(false);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("share");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  };
+  const accept = async () => {
+    setBusy(true);
+    try {
+      const next = await acceptWorkoutShare(userId, token);
+      close();
+      onAccepted(next);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Ajout impossible.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <Dialog.Root open={open} onOpenChange={(nextOpen) => !nextOpen && close()}><Dialog.Portal><Dialog.Overlay className="modal-backdrop"/><Dialog.Content className="confirm-dialog shared-workout-dialog"><Dialog.Title>Séance partagée avec vous</Dialog.Title>{error ? <div className="data-error"><CircleAlert />{error}</div> : shared ? <><div className="shared-workout-preview"><Dumbbell/><div><h3>{shared.title}</h3><p>{shared.exercises.length} exercices · environ {shared.duration} min</p></div></div><ol>{shared.exercises.slice(0, 6).map((exercise) => <li key={exercise.id}><b>{exercise.name}</b><span>{exercise.sets} × {exercise.reps}</span></li>)}</ol>{shared.exercises.length > 6 && <p>+ {shared.exercises.length - 6} autres exercices</p>}</> : <p>Chargement de la séance…</p>}<div className="modal-actions"><Dialog.Close asChild><button className="secondary">Refuser</button></Dialog.Close><button className="primary" disabled={!shared || busy || Boolean(error)} onClick={() => void accept()}>{busy ? "Ajout…" : "Ajouter à mes séances"}</button></div></Dialog.Content></Dialog.Portal></Dialog.Root>;
 }
 
 function Brand({ mobile = false }: { mobile?: boolean }) {
@@ -1144,7 +1247,7 @@ function ImportWorkout({
           rest: item.rest,
           muscle: catalogMatch?.primaryMuscles?.[0] ?? "Non renseigné",
           done: 0,
-          load: undefined,
+          load: item.load ?? undefined,
           notes: item.notes,
           method: item.method,
           blockKey: item.blockKey ?? undefined,
@@ -1169,7 +1272,7 @@ function ImportWorkout({
         exercises: workoutExercises,
         warmup: buildWarmupItems(
           parsed.exercises.map((item) => item.name).join(" "),
-        ),
+        ).map(([name, detail], position) => ({ name, detail, position })),
         created_at: serverTimestamp(),
       });
       setBusy(false);
@@ -1291,9 +1394,18 @@ function ImportWorkout({
                   <b>{e.name}</b>
                   {e.method && <em>{e.method}</em>}
                   <small>
-                    {e.sets} × {e.reps}
+                    {e.load && e.sets === 1
+                      ? `${e.reps} × ${e.load}`
+                      : `${e.sets} × ${e.reps}${e.load ? ` · ${e.load}` : ""}`}
                   </small>
-                  <small>{match ? "Démo associée" : `${e.rest}s repos`}</small>
+                  <small>
+                    {e.rest > 0 ? `Récupération : ${e.rest}s` : "Récupération : —"}
+                  </small>
+                  {e.notes && (
+                    <p className="parsed-instructions">
+                      <b>Consignes :</b> {e.notes}
+                    </p>
+                  )}
                 </div>
               );
             })}
@@ -1343,6 +1455,22 @@ function SessionsPage({
     Array<{ name: string; sets: number; reps: string; rest: number }>
   >([]);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [sharingId, setSharingId] = useState("");
+  const [shareUrl, setShareUrl] = useState("");
+
+  const shareWorkout = async (item: WorkoutListItem) => {
+    const user = firebaseAuth.currentUser;
+    if (!user) return;
+    setSharingId(item.workout.id);
+    try {
+      const token = await createWorkoutShare(user.uid, item.workout);
+      setShareUrl(`${window.location.origin}${window.location.pathname}?share=${token}`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Partage impossible.");
+    } finally {
+      setSharingId("");
+    }
+  };
 
   const refresh = async () => {
     const user = firebaseAuth.currentUser;
@@ -1512,6 +1640,9 @@ function SessionsPage({
               >
                 Modifier
               </button>
+              <button className="secondary share-session" disabled={sharingId === item.workout.id} onClick={() => void shareWorkout(item)}>
+                <Share2 /> {sharingId === item.workout.id ? "Création…" : "Partager"}
+              </button>
               <button
                 className="delete-session"
                 disabled={deleting === item.programId}
@@ -1555,6 +1686,17 @@ function SessionsPage({
           </AlertDialog.Content>
         </AlertDialog.Portal>
       </AlertDialog.Root>
+      <Dialog.Root open={Boolean(shareUrl)} onOpenChange={(open) => !open && setShareUrl("")}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="modal-backdrop" />
+          <Dialog.Content className="confirm-dialog share-dialog">
+            <Dialog.Title>Partager cette séance</Dialog.Title>
+            <Dialog.Description>Envoyez ce lien à une personne qui possède Repflow. Elle pourra consulter la séance puis l’ajouter à son compte.</Dialog.Description>
+            <label>Lien valable 30 jours<input value={shareUrl} readOnly onFocus={(event) => event.currentTarget.select()} /></label>
+            <div className="modal-actions"><Dialog.Close asChild><button className="secondary">Fermer</button></Dialog.Close><button className="primary" onClick={() => void navigator.clipboard.writeText(shareUrl).then(() => notify("Lien copié"))}>Copier le lien</button></div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
       <Dialog.Root
         open={Boolean(editing)}
         onOpenChange={(open) => !open && setEditing(null)}
@@ -1690,7 +1832,7 @@ function SessionsPage({
 
 function MovementGuide() {
   const [category, setCategory] = useState("Jambes");
-  const [bodyView, setBodyView] = useState<"homme" | "femme">("homme");
+  const [atlasMuscle, setAtlasMuscle] = useState<MuscleZone | null>(null);
   const [catalog, setCatalog] = useState<CatalogExercise[]>([]);
   const [search, setSearch] = useState("");
   const [catalogPage, setCatalogPage] = useState(1);
@@ -1765,9 +1907,12 @@ function MovementGuide() {
       },
     ],
   };
-  const filtered = catalog.filter((item) =>
-    item.name.toLowerCase().includes(search.toLowerCase()),
-  );
+  const catalogZones = (item: CatalogExercise) => {
+    const mapping: Record<string, MuscleZone> = { chest: 'pectoraux', shoulders: 'épaules', biceps: 'biceps', triceps: 'triceps', forearms: 'avant-bras', abdominals: 'abdominaux', lats: 'dorsaux', 'middle back': 'dorsaux', traps: 'trapèzes', neck: 'trapèzes', 'lower back': 'lombaires', glutes: 'fessiers', quadriceps: 'quadriceps', hamstrings: 'ischio-jambiers', adductors: 'adducteurs', calves: 'mollets' };
+    return [...item.primaryMuscles, ...item.secondaryMuscles].map(value => mapping[value]).filter(Boolean);
+  };
+  const atlasItems = (Object.keys(muscleZoneLabels) as MuscleZone[]).map(zone => ({ zone, primary: true, count: catalog.filter(item => catalogZones(item).includes(zone)).length }));
+  const filtered = catalog.filter(item => item.name.toLowerCase().includes(search.toLowerCase()) && (!atlasMuscle || catalogZones(item).includes(atlasMuscle)));
   const pageSize = 20;
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const visible = filtered.slice(
@@ -1785,27 +1930,8 @@ function MovementGuide() {
         title="Guide des mouvements"
         text="Comprenez chaque exercice avant de le pratiquer."
       />
-      <section className="muscle-groups-card">
-        <div>
-          <span className="eyebrow">ANATOMIE</span>
-          <h2>Principaux groupes musculaires</h2>
-          <p>Repérez les zones principalement sollicitées avant de choisir un exercice.</p>
-          <div className="body-view-toggle" role="group" aria-label="Choisir la représentation anatomique">
-            <button type="button" className={bodyView === "homme" ? "selected" : ""} onClick={() => setBodyView("homme")}>Homme</button>
-            <button type="button" className={bodyView === "femme" ? "selected" : ""} onClick={() => setBodyView("femme")}>Femme</button>
-          </div>
-        </div>
-        <div className="muscle-groups-images">
-          <figure className={bodyView === "homme" ? "active" : "hidden"}>
-            <img src="/images/guides/muscle-groups.png" alt="Schéma original des principaux groupes musculaires chez l’homme, vues avant et arrière" />
-            <figcaption>Homme</figcaption>
-          </figure>
-          <figure className={bodyView === "femme" ? "active" : "hidden"}>
-            <img src="/images/guides/muscle-groups-female.png" alt="Schéma original des principaux groupes musculaires chez la femme, vues avant et arrière" />
-            <figcaption>Femme</figcaption>
-          </figure>
-        </div>
-      </section>
+      <MuscleAtlas guide items={atlasItems} selected={atlasMuscle} onSelect={zone => { setAtlasMuscle(zone); setCatalogPage(1); }} />
+      {atlasMuscle && <p role="status">{filtered.length} exercices associés à {muscleZoneLabels[atlasMuscle]} — résultats dans le catalogue ci-dessous.</p>}
       <div className="guide-category-tabs">
         {Object.keys(items).map((name) => (
           <button
@@ -2308,6 +2434,13 @@ function WorkoutScreen({
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [paused, setPaused] = useState(false);
   const [demo, setDemo] = useState<Exercise | null>(null);
+  const [selectedMuscle, setSelectedMuscle] = useState<MuscleZone | null>(null);
+  const visibleExercises = selectedMuscle
+    ? workout.exercises.filter((exercise) => {
+        const muscles = inferExerciseMuscles(exercise);
+        return muscles.primary.includes(selectedMuscle) || muscles.secondary.includes(selectedMuscle);
+      })
+    : workout.exercises;
   useEffect(() => {
     if (!active) {
       setElapsedSeconds(0);
@@ -2403,9 +2536,11 @@ function WorkoutScreen({
               <Clock3 />≈ {workout.duration} min
             </span>
           </div>
-          {workout.exercises.map((e, i) => (
+          <WorkoutMuscleMap exercises={workout.exercises} selected={selectedMuscle} onSelect={setSelectedMuscle} />
+          {selectedMuscle && <div className="muscle-filter-result"><b>{visibleExercises.length} exercice{visibleExercises.length > 1 ? "s" : ""}</b> pour {muscleZoneLabels[selectedMuscle]}<button type="button" onClick={() => setSelectedMuscle(null)}>Effacer le filtre</button></div>}
+          {visibleExercises.map((e) => (
             <div className="exercise-row" key={e.id}>
-              <span className="order">{String(i + 1).padStart(2, "0")}</span>
+              <span className="order">{String(workout.exercises.findIndex((exercise) => exercise.id === e.id) + 1).padStart(2, "0")}</span>
               <button
                 className="exercise-thumb"
                 onClick={() => e.imageUrl && setDemo(e)}
@@ -2487,7 +2622,11 @@ function WorkoutScreen({
                     {e.method && (
                       <span className="method-badge">{e.method}</span>
                     )}
-                    {e.notes && <p className="live-note">{e.notes}</p>}
+                    {e.notes && (
+                      <p className="live-note">
+                        <b>Consignes :</b> {e.notes}
+                      </p>
+                    )}
                     {e.blockType &&
                       workout.exercises.findIndex(
                         (item) => item.blockKey === e.blockKey,
@@ -2521,25 +2660,33 @@ function WorkoutScreen({
                       {e.load ?? (isBodyweightExercise(e.name) ? "PDC" : "—")} ×{" "}
                       {e.reps}
                     </span>
-                    <input
-                      inputMode="decimal"
-                      value={e.performed?.[j]?.load ?? ""}
-                      placeholder={
-                        e.load?.replace(" kg", "") ??
-                        (isBodyweightExercise(e.name) ? "PDC" : "—")
-                      }
-                      onChange={(event) =>
-                        updateSet(e.id, j, "load", event.target.value)
-                      }
-                    />
-                    <input
-                      inputMode="numeric"
-                      value={e.performed?.[j]?.reps ?? ""}
-                      placeholder={e.reps}
-                      onChange={(event) =>
-                        updateSet(e.id, j, "reps", event.target.value)
-                      }
-                    />
+                    <label className="set-entry load-entry">
+                      <small>Charge réalisée</small>
+                      <input
+                        inputMode="decimal"
+                        aria-label={`Charge réalisée, série ${j + 1}`}
+                        value={e.performed?.[j]?.load ?? ""}
+                        placeholder={
+                          e.load?.replace(" kg", "") ??
+                          (isBodyweightExercise(e.name) ? "PDC" : "—")
+                        }
+                        onChange={(event) =>
+                          updateSet(e.id, j, "load", event.target.value)
+                        }
+                      />
+                    </label>
+                    <label className="set-entry reps-entry">
+                      <small>Répétitions réalisées</small>
+                      <input
+                        inputMode="numeric"
+                        aria-label={`Répétitions réalisées, série ${j + 1}`}
+                        value={e.performed?.[j]?.reps ?? ""}
+                        placeholder={e.reps}
+                        onChange={(event) =>
+                          updateSet(e.id, j, "reps", event.target.value)
+                        }
+                      />
+                    </label>
                     <div
                       className={`set-status ${setStatus(e, j).toLowerCase()}`}
                     >

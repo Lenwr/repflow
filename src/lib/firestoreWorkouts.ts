@@ -3,10 +3,12 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getDocs,
   orderBy,
   query,
   serverTimestamp,
+  setDoc,
   updateDoc,
   where,
 } from "firebase/firestore";
@@ -126,4 +128,51 @@ export async function saveFirebaseWorkout(
     })),
   ));
   return log.id;
+}
+
+export async function createWorkoutShare(userId: string, workout: Workout) {
+  const token = crypto.randomUUID().replace(/-/g, "");
+  const cleanWorkout = JSON.parse(JSON.stringify({ ...workout, done: undefined }));
+  await setDoc(doc(firestore, "workout_shares", token), {
+    owner_id: userId,
+    workout: cleanWorkout,
+    active: true,
+    created_at: serverTimestamp(),
+    expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+  });
+  return token;
+}
+
+export async function loadWorkoutShare(token: string) {
+  const snapshot = await getDoc(doc(firestore, "workout_shares", token));
+  if (!snapshot.exists()) throw new Error("Ce partage n’existe pas ou a été retiré.");
+  const data = snapshot.data() as { active?: boolean; expires_at?: string; workout?: Workout };
+  if (!data.active || !data.workout) throw new Error("Ce partage n’est plus disponible.");
+  if (data.expires_at && new Date(data.expires_at) < new Date()) throw new Error("Ce lien de partage a expiré.");
+  return data.workout;
+}
+
+export async function acceptWorkoutShare(userId: string, token: string) {
+  const shared = await loadWorkoutShare(token);
+  const createdAt = serverTimestamp();
+  const program = await addDoc(collection(firestore, "programs"), {
+    owner_id: userId,
+    title: shared.subtitle || `Séance partagée — ${shared.title}`,
+    description: "Séance reçue par partage",
+    duration_weeks: 1,
+    client_ids: {},
+    source_share_id: token,
+    created_at: createdAt,
+  });
+  const workoutData = JSON.parse(JSON.stringify({
+    ...shared,
+    id: undefined,
+    owner_id: userId,
+    program_id: program.id,
+    client_ids: {},
+    status: "planned",
+    exercises: shared.exercises.map((exercise) => ({ ...exercise, id: crypto.randomUUID(), done: 0, performed: undefined })),
+  }));
+  const saved = await addDoc(collection(firestore, "workouts"), { ...workoutData, created_at: createdAt });
+  return { ...shared, ...workoutData, id: saved.id } as Workout;
 }

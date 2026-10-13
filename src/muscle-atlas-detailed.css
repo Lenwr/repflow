@@ -1,0 +1,67 @@
+.anatomy-atlas .atlas-layout { grid-template-columns: minmax(0, 1.25fr) minmax(250px, .75fr); align-items: start; }
+.anatomy-atlas .atlas-stage { position: relative; padding: 16px; background: #f4f6f2; min-width: 0; }
+.atlas-zoom { display: flex; gap: 6px; align-self: flex-end; margin-bottom: 10px; position: sticky; top: 8px; z-index: 3; }
+.atlas-zoom button { display: grid; place-items: center; width: 40px; height: 40px; border: 1px solid var(--line); border-radius: 10px; background: white; color: var(--green); }
+.atlas-zoom svg { width: 17px; }
+.atlas-canvas-scroll { width: 100%; max-height: 720px; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--line); border-radius: 16px; background: white; }
+.atlas-canvas { position: relative; min-width: 100%; margin: auto; transition: width .18s ease; }
+.atlas-canvas img { display: block; width: 100%; height: auto; }
+.atlas-canvas svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.atlas-hotspot { cursor: pointer; fill: transparent; stroke: transparent; outline: none; }
+.atlas-hotspot.support, .atlas-hotspot.target, .atlas-hotspot.chosen { fill: transparent; stroke: transparent; filter: none; }
+.atlas-hotspot.inactive { pointer-events: none; cursor: default; }
+.atlas-hotspot:not(.inactive):focus-visible { fill: transparent; stroke: #173d34; stroke-width: 4; stroke-dasharray: 12 10; }
+.atlas-selection { display: grid; gap: 3px; margin-bottom: 14px; padding: 15px; border-radius: 14px; background: #173d34; color: white; }
+.atlas-selection span, .atlas-selection small { font-size: 10px; color: #c8d7d1; }
+.atlas-selection strong { font: 800 21px Manrope, sans-serif; }
+.atlas-muscles { grid-template-columns: 1fr; }
+.atlas-muscles button { min-height: 58px; }
+.atlas-muscles b { overflow-wrap: anywhere; word-break: normal; }
+.anatomy-atlas .atlas-muscles button { --zone-color: #397968; }
+.anatomy-atlas .atlas-muscles button[data-zone="pectoraux"] { --zone-color: #c73526; }
+.anatomy-atlas .atlas-muscles button[data-zone="épaules"] { --zone-color: #ef4b25; }
+.anatomy-atlas .atlas-muscles button[data-zone="biceps"] { --zone-color: #b52568; }
+.anatomy-atlas .atlas-muscles button[data-zone="triceps"] { --zone-color: #1595b2; }
+.anatomy-atlas .atlas-muscles button[data-zone="avant-bras"] { --zone-color: #4f9a3a; }
+.anatomy-atlas .atlas-muscles button[data-zone="abdominaux"] { --zone-color: #7bb844; }
+.anatomy-atlas .atlas-muscles button[data-zone="dorsaux"] { --zone-color: #24a4b5; }
+.anatomy-atlas .atlas-muscles button[data-zone="trapèzes"] { --zone-color: #7644a5; }
+.anatomy-atlas .atlas-muscles button[data-zone="lombaires"] { --zone-color: #777a78; }
+.anatomy-atlas .atlas-muscles button[data-zone="fessiers"] { --zone-color: #9b7562; }
+.anatomy-atlas .atlas-muscles button[data-zone="quadriceps"] { --zone-color: #efb72c; }
+.anatomy-atlas .atlas-muscles button[data-zone="ischio-jambiers"] { --zone-color: #dc7890; }
+.anatomy-atlas .atlas-muscles button[data-zone="adducteurs"] { --zone-color: #354d78; }
+.anatomy-atlas .atlas-muscles button[data-zone="mollets"] { --zone-color: #70459a; }
+.anatomy-atlas .atlas-muscles button i,
+.anatomy-atlas .atlas-muscles button i.support,
+.anatomy-atlas .atlas-muscles button i.target { background: var(--zone-color); }
+.anatomy-atlas .atlas-muscles button em { white-space: nowrap; font-size: 11px; }
+.anatomy-atlas .atlas-muscles button[aria-pressed="true"] { border-color: var(--zone-color); box-shadow: inset 4px 0 0 var(--zone-color); }
+.anatomy-atlas .atlas-panel,
+.anatomy-atlas .atlas-note,
+.anatomy-atlas .atlas-legend { min-width: 0; overflow-wrap: anywhere; }
+@container (max-width: 820px) {
+  .anatomy-atlas .atlas-layout { grid-template-columns: 1fr; }
+  .anatomy-atlas .atlas-panel { border-top: 1px solid var(--line); }
+  .anatomy-atlas .atlas-muscles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .atlas-canvas-scroll { max-height: 680px; }
+}
+@container (max-width: 520px) {
+  .anatomy-atlas header { padding: 18px; flex-direction: column; }
+  .anatomy-atlas .atlas-switch { width: 100%; }
+  .anatomy-atlas .atlas-switch button { flex: 1; }
+  .anatomy-atlas .atlas-muscles { grid-template-columns: 1fr; }
+  .anatomy-atlas .atlas-panel { padding: 16px; }
+}
+@media (max-width: 1050px) {
+  .anatomy-atlas .atlas-layout { grid-template-columns: 1fr; }
+  .atlas-canvas-scroll { max-height: 680px; }
+  .anatomy-atlas .atlas-panel { border-top: 1px solid var(--line); }
+}
+@media (max-width: 600px) {
+  .anatomy-atlas .atlas-stage { padding: 10px; }
+  .atlas-canvas-scroll { max-height: 70vh; border-radius: 12px; }
+  .atlas-zoom { align-self: center; }
+  .atlas-canvas { min-width: 100%; }
+  .atlas-hotspot:not(.inactive):focus-visible { stroke-width: 7; }
+}

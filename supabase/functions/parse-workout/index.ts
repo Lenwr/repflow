@@ -15,11 +15,12 @@ const schema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["name", "sets", "reps", "rest", "method", "notes", "blockKey", "blockType", "blockDuration", "workSeconds", "blockRest", "blockRounds"],
+        required: ["name", "sets", "reps", "load", "rest", "method", "notes", "blockKey", "blockType", "blockDuration", "workSeconds", "blockRest", "blockRounds"],
         properties: {
           name: { type: "string" },
           sets: { type: "integer", minimum: 1, maximum: 100 },
           reps: { type: "string" },
+          load: { type: ["string", "null"] },
           rest: { type: "integer", minimum: 0, maximum: 3600 },
           method: { type: ["string", "null"] },
           notes: { type: ["string", "null"] },
@@ -68,7 +69,7 @@ Deno.serve(async (request) => {
             role: "system",
             content: [{
               type: "input_text",
-              text: `Tu structures des programmes de musculation en français. Ne crée aucune information absente. Ignore les en-têtes de tableau, noms du coach, dates et objectifs comme exercices. Reconnais les abréviations courantes (MU, pull-up, SBD), circuits, supersets, blocs, EMOM, AMRAP et Tabata. Crée une ligne par exercice réellement demandé. Conserve l'échauffement et la mobilité, avec method="Échauffement". Pour une durée, écris-la dans reps. Si le repos n'est pas indiqué, mets rest=0. Place le nom du bloc dans method. Tous les exercices d'un même bloc reçoivent le même blockKey court. Renseigne blockType uniquement pour EMOM, AMRAP, Tabata, Intervalles ou Circuit, sinon null. Convertis toutes les durées de bloc en secondes dans blockDuration. Pour EMOM, workSeconds=60. Pour Tabata, utilise les temps indiqués ou 20/10. Renseigne blockRounds seulement s'il est indiqué ou directement déductible. Une liste avec « ou » reste un choix unique. Signale toute ambiguïté dans warnings.`,
+              text: `Tu structures des programmes de musculation en français. Ne crée aucune information absente. Ignore les en-têtes de tableau, noms du coach, dates et objectifs comme exercices. Reconnais les abréviations courantes (MU, pull-up, SBD), circuits, supersets, blocs, EMOM, AMRAP et Tabata. Crée une ligne par exercice réellement demandé. Conserve l'échauffement et la mobilité, avec method="Échauffement". Pour une durée, écris-la dans reps. EXTRACTION IMPORTANTE : « récupération », « récup », « repos », « rest », ainsi que les durées isolées placées à côté d'un exercice (par exemple 3’, 2 min ou 90 s), doivent alimenter rest en secondes. Associe la durée au bon exercice ou au bon bloc ; ne la transforme jamais en répétitions ou en charge. Si le repos n'est pas indiqué, mets rest=0. Toutes les consignes d'exécution, de tempo, de technique, d'intensité, de sécurité et les variantes (« sans rebond », « se concentrer sur la technique », RIR/RPE, tempo, prise, amplitude, charge maximale, option avec “ou”) doivent être conservées fidèlement dans notes et associées au bon exercice. Place le nom du bloc dans method. Tous les exercices d'un même bloc reçoivent le même blockKey court. Renseigne blockType uniquement pour EMOM, AMRAP, Tabata, Intervalles ou Circuit, sinon null. Convertis toutes les durées de bloc en secondes dans blockDuration. Pour EMOM, workSeconds=60. Pour Tabata, utilise les temps indiqués ou 20/10. Renseigne blockRounds seulement s'il est indiqué ou directement déductible. Une liste avec « ou » reste un choix unique. IMPORTANT : une notation suivie de kg comme « 3 × 115 kg » signifie 3 répétitions à 115 kg : sets=1, reps="3", load="115 kg". « 6 × 97,5 kg ou 10 × 67,5 kg » décrit des options de répétitions/charges ; conserve la première dans reps/load et les autres dans notes. Une notation sans kg comme « 4 × 8 » signifie 4 séries de 8 répétitions. Signale toute ambiguïté dans warnings.`,
             }],
           },
           {
