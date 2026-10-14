@@ -1,7 +1,5 @@
 import {
-  addDoc,
   collection,
-  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -11,9 +9,16 @@ import {
   setDoc,
   updateDoc,
   where,
+  writeBatch,
 } from "firebase/firestore";
 import { firestore } from "./firebase";
 import type { Workout } from "../types";
+
+export type WorkoutListItem = {
+  programId: string;
+  createdAt: string;
+  workout: Workout;
+};
 
 type FirestoreWorkout = Workout & {
   owner_id: string;
@@ -49,8 +54,10 @@ export async function loadFirebaseWorkouts(userId: string) {
 }
 
 export async function deleteFirebaseWorkout(programId: string, workoutId: string) {
-  await deleteDoc(doc(firestore, "workouts", workoutId));
-  if (programId !== workoutId) await deleteDoc(doc(firestore, "programs", programId));
+  const batch = writeBatch(firestore);
+  batch.delete(doc(firestore, "workouts", workoutId));
+  if (programId !== workoutId) batch.delete(doc(firestore, "programs", programId));
+  await batch.commit();
 }
 
 export async function updateFirebaseWorkoutTitle(workoutId: string, title: string) {
@@ -105,7 +112,9 @@ export async function saveFirebaseWorkout(
   durationSeconds = 0,
 ) {
   const completedAt = new Date().toISOString();
-  const log = await addDoc(collection(firestore, "workout_logs"), {
+  const batch = writeBatch(firestore);
+  const log = doc(collection(firestore, "workout_logs"));
+  batch.set(log, {
     user_id: userId,
     workout_id: workout.id,
     status: "completed",
@@ -115,8 +124,10 @@ export async function saveFirebaseWorkout(
     duration_seconds: durationSeconds,
     created_at: serverTimestamp(),
   });
-  await Promise.all(workout.exercises.flatMap((exercise) =>
-    Array.from({ length: exercise.done }, (_, index) => addDoc(collection(firestore, "set_logs"), {
+  workout.exercises.forEach((exercise) => {
+    Array.from({ length: exercise.done }, (_, index) => {
+      const setLog = doc(collection(firestore, "set_logs"));
+      batch.set(setLog, {
       user_id: userId,
       workout_log_id: log.id,
       workout_exercise_id: exercise.id,
@@ -125,8 +136,10 @@ export async function saveFirebaseWorkout(
       load: Number.parseFloat(exercise.performed?.[index]?.load ?? exercise.load ?? "") || null,
       completed: true,
       created_at: serverTimestamp(),
-    })),
-  ));
+      });
+    });
+  });
+  await batch.commit();
   return log.id;
 }
 
@@ -155,7 +168,9 @@ export async function loadWorkoutShare(token: string) {
 export async function acceptWorkoutShare(userId: string, token: string) {
   const shared = await loadWorkoutShare(token);
   const createdAt = serverTimestamp();
-  const program = await addDoc(collection(firestore, "programs"), {
+  const batch = writeBatch(firestore);
+  const program = doc(collection(firestore, "programs"));
+  batch.set(program, {
     owner_id: userId,
     title: shared.subtitle || `Séance partagée — ${shared.title}`,
     description: "Séance reçue par partage",
@@ -173,6 +188,8 @@ export async function acceptWorkoutShare(userId: string, token: string) {
     status: "planned",
     exercises: shared.exercises.map((exercise) => ({ ...exercise, id: crypto.randomUUID(), done: 0, performed: undefined })),
   }));
-  const saved = await addDoc(collection(firestore, "workouts"), { ...workoutData, created_at: createdAt });
+  const saved = doc(collection(firestore, "workouts"));
+  batch.set(saved, { ...workoutData, created_at: createdAt });
+  await batch.commit();
   return { ...shared, ...workoutData, id: saved.id } as Workout;
 }

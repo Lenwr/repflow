@@ -1,5 +1,0 @@
-[functions.parse-workout]
-verify_jwt = true
-
-[functions.delete-account]
-verify_jwt = true

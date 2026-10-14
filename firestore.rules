@@ -56,37 +56,106 @@ service cloud.firestore {
     match /coach_clients/{linkId} {
       allow read: if signedIn() && (resource.data.coach_id == request.auth.uid || resource.data.client_id == request.auth.uid);
       allow create: if isCoach() && request.resource.data.coach_id == request.auth.uid;
-      allow update, delete: if isCoach() && resource.data.coach_id == request.auth.uid;
+      allow update: if isCoach()
+        && resource.data.coach_id == request.auth.uid
+        && request.resource.data.coach_id == resource.data.coach_id
+        && request.resource.data.client_id == resource.data.client_id;
+      allow delete: if isCoach() && resource.data.coach_id == request.auth.uid;
+    }
+
+    match /coach_invites/{inviteId} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if isCoach()
+        && request.resource.data.coach_id == request.auth.uid
+        && request.resource.data.used == false;
+      allow update: if signedIn()
+        && resource.data.used == false
+        && request.resource.data.coach_id == resource.data.coach_id
+        && request.resource.data.used == true
+        && request.resource.data.used_by == request.auth.uid;
+      allow delete: if signedIn() && resource.data.coach_id == request.auth.uid;
+    }
+
+    match /program_assignments/{assignmentId} {
+      allow read: if signedIn()
+        && (resource.data.assigned_by == request.auth.uid || resource.data.client_id == request.auth.uid);
+      allow create: if isCoach()
+        && request.resource.data.assigned_by == request.auth.uid
+        && isLinkedClient(request.resource.data.client_id);
+      allow update, delete: if isCoach()
+        && resource.data.assigned_by == request.auth.uid
+        && request.resource.data.assigned_by == resource.data.assigned_by
+        && request.resource.data.client_id == resource.data.client_id;
+    }
+
+    match /coach_client_notes/{noteId} {
+      allow read: if isCoach()
+        && resource.data.coach_id == request.auth.uid
+        && isLinkedClient(resource.data.client_id);
+      allow create: if isCoach()
+        && request.resource.data.coach_id == request.auth.uid
+        && isLinkedClient(request.resource.data.client_id);
+      allow update, delete: if isCoach()
+        && resource.data.coach_id == request.auth.uid
+        && request.resource.data.coach_id == resource.data.coach_id
+        && request.resource.data.client_id == resource.data.client_id;
     }
 
     match /programs/{programId} {
       allow read: if signedIn() && (resource.data.owner_id == request.auth.uid || resource.data.client_ids[request.auth.uid] == true);
       allow create: if signedIn() && request.resource.data.owner_id == request.auth.uid;
-      allow update, delete: if signedIn() && resource.data.owner_id == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.owner_id == request.auth.uid
+        && request.resource.data.owner_id == resource.data.owner_id;
+      allow delete: if signedIn() && resource.data.owner_id == request.auth.uid;
     }
 
     match /workouts/{workoutId} {
       allow read: if signedIn() && (resource.data.owner_id == request.auth.uid || resource.data.client_ids[request.auth.uid] == true);
-      allow create, update, delete: if signedIn() && request.resource.data.owner_id == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.owner_id == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.owner_id == request.auth.uid
+        && request.resource.data.owner_id == resource.data.owner_id;
+      allow delete: if signedIn() && resource.data.owner_id == request.auth.uid;
     }
 
     match /workout_exercises/{exerciseId} {
       allow read: if signedIn() && (resource.data.owner_id == request.auth.uid || resource.data.client_ids[request.auth.uid] == true);
-      allow create, update, delete: if signedIn() && request.resource.data.owner_id == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.owner_id == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.owner_id == request.auth.uid
+        && request.resource.data.owner_id == resource.data.owner_id;
+      allow delete: if signedIn() && resource.data.owner_id == request.auth.uid;
     }
 
     match /workout_logs/{logId} {
-      allow read, create, update: if signedIn() && (resource.data.user_id == request.auth.uid || request.resource.data.user_id == request.auth.uid);
+      allow read: if signedIn()
+        && (resource.data.user_id == request.auth.uid || (isCoach() && isLinkedClient(resource.data.user_id)));
+      allow create: if signedIn() && request.resource.data.user_id == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.user_id == request.auth.uid
+        && request.resource.data.user_id == resource.data.user_id;
       allow delete: if signedIn() && resource.data.user_id == request.auth.uid;
     }
 
     match /set_logs/{setLogId} {
-      allow read, create, update, delete: if signedIn() && resource.data.user_id == request.auth.uid;
+      allow read: if signedIn()
+        && (resource.data.user_id == request.auth.uid || (isCoach() && isLinkedClient(resource.data.user_id)));
+      allow create: if signedIn() && request.resource.data.user_id == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.user_id == request.auth.uid
+        && request.resource.data.user_id == resource.data.user_id;
+      allow delete: if signedIn() && resource.data.user_id == request.auth.uid;
     }
 
     match /exercises/{exerciseId} {
       allow read: if signedIn();
-      allow create, update, delete: if signedIn() && resource.data.created_by == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.created_by == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.created_by == request.auth.uid
+        && request.resource.data.created_by == resource.data.created_by;
+      allow delete: if signedIn() && resource.data.created_by == request.auth.uid;
     }
 
     match /workout_shares/{shareId} {
@@ -96,8 +165,17 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.resource.data.owner_id == request.auth.uid
         && request.resource.data.active == true;
-      allow update, delete: if signedIn()
-        && resource.data.owner_id == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.owner_id == request.auth.uid
+        && request.resource.data.owner_id == resource.data.owner_id;
+      allow delete: if signedIn() && resource.data.owner_id == request.auth.uid;
+    }
+
+    match /import_corrections/{correctionId} {
+      allow read: if signedIn() && resource.data.user_id == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.user_id == request.auth.uid;
+      allow update: if false;
+      allow delete: if signedIn() && resource.data.user_id == request.auth.uid;
     }
 
     match /{document=**} {

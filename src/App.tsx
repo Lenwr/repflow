@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { MuscleAtlas, type AtlasItem } from './MuscleAtlas';
-import { onAuthStateChanged, type User } from "firebase/auth";
+import { onAuthStateChanged, updateEmail, updatePassword, updateProfile, type User } from "firebase/auth";
 import {
-  addDoc,
   collection,
   doc,
   getDoc,
   setDoc,
   serverTimestamp,
+  writeBatch,
 } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import {
@@ -29,6 +30,7 @@ import {
   Menu,
   MoreHorizontal,
   Play,
+  Pencil,
   Plus,
   Search,
   Share2,
@@ -44,23 +46,23 @@ import {
 } from "lucide-react";
 import { workout as seedWorkout } from "./data";
 import type { Effort, Exercise, Role, Workout } from "./types";
-import { isSupabaseConfigured, supabase } from "./lib/supabase";
-import { parseWorkoutText, slugifyExercise } from "./lib/importProgram";
+import { parseWorkoutText } from "./lib/importProgram";
 import {
   catalogImage,
   catalogSource,
   findCatalogExercise,
   type CatalogExercise,
 } from "./lib/exerciseCatalog";
-import {
-  loadNextWorkout,
-  loadWorkouts,
-  saveCompletedWorkout,
-  type WorkoutListItem,
-} from "./lib/workouts";
 import { extractWorkoutText } from "./lib/fileImport";
 import { analyzeWorkoutWithAi, type AiWorkoutImport } from "./lib/aiImport";
-import { firebaseAuth, firestore } from "./lib/firebase";
+import { importWasCorrected, loadSimilarImportCorrections } from "./lib/importLearning";
+import { firebaseAuth, firebaseFunctions, firestore } from "./lib/firebase";
+import {
+  acceptCoachInvite, addClientNote, addProgramBlock, addProgramExercise,
+  assignProgram, createCoachInvite, createProgram, createProgramWorkout,
+  deactivateAssignment, endCoaching as endFirebaseCoaching, loadClientDetails, loadCoachClients,
+  loadProgramEditor, loadPrograms, loadRecentLogs, replaceProgramExercises,
+} from "./lib/firebaseCoach";
 import {
   deleteFirebaseWorkout,
   loadFirebaseProgress,
@@ -71,6 +73,7 @@ import {
   createWorkoutShare,
   loadWorkoutShare,
   acceptWorkoutShare,
+  type WorkoutListItem,
 } from "./lib/firestoreWorkouts";
 
 type AppSession = { user: User & { user_metadata?: Record<string, unknown> } };
@@ -223,6 +226,9 @@ function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [workout, setWorkout] = useState<Workout>(seedWorkout);
   const [active, setActive] = useState(false);
+  const [workoutPaused, setWorkoutPaused] = useState(false);
+  const [workoutElapsedSeconds, setWorkoutElapsedSeconds] = useState(0);
+  const [activeRestoreReady, setActiveRestoreReady] = useState(false);
   const [effort, setEffort] = useState<Effort | null>(null);
   const [toast, setToast] = useState("");
   const [importOpen, setImportOpen] = useState(false);
@@ -305,6 +311,31 @@ function App() {
 
   useEffect(() => {
     if (!session || !role || role === "coach") return;
+    const storageKey = `repflow-active-workout:${session.user.uid}`;
+    try {
+      const saved = window.localStorage.getItem(storageKey);
+      if (saved) {
+        const restored = JSON.parse(saved) as {
+          workout: Workout;
+          paused: boolean;
+          elapsedSeconds: number;
+          savedAt: number;
+        };
+        if (restored.workout?.id) {
+          const offlineSeconds = restored.paused
+            ? 0
+            : Math.max(0, Math.floor((Date.now() - restored.savedAt) / 1000));
+          setWorkout(restored.workout);
+          setWorkoutPaused(restored.paused);
+          setWorkoutElapsedSeconds(restored.elapsedSeconds + offlineSeconds);
+          setActive(true);
+          setActiveRestoreReady(true);
+          return;
+        }
+      }
+    } catch {
+      window.localStorage.removeItem(storageKey);
+    }
     (session
       ? loadNextFirebaseWorkout(session.user.uid)
       : Promise.resolve(null)
@@ -322,29 +353,47 @@ function App() {
             day: "",
           });
       })
-      .catch(() => notify("Impossible de charger votre programme."));
+      .catch(() => notify("Impossible de charger votre programme."))
+      .finally(() => setActiveRestoreReady(true));
   }, [session, role]);
 
   useEffect(() => {
+    if (!active || workoutPaused) return;
+    const timer = window.setInterval(
+      () => setWorkoutElapsedSeconds((value) => value + 1),
+      1000,
+    );
+    return () => window.clearInterval(timer);
+  }, [active, workoutPaused]);
+
+  useEffect(() => {
+    if (!session || !activeRestoreReady || role === "coach") return;
+    const storageKey = `repflow-active-workout:${session.user.uid}`;
+    if (!active) {
+      window.localStorage.removeItem(storageKey);
+      return;
+    }
+    window.localStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        workout,
+        paused: workoutPaused,
+        elapsedSeconds: workoutElapsedSeconds,
+        savedAt: Date.now(),
+      }),
+    );
+  }, [session, role, activeRestoreReady, active, workout, workoutPaused, workoutElapsedSeconds]);
+
+  useEffect(() => {
     const token = new URLSearchParams(window.location.search).get("invite");
-    if (!supabase || !session || !token) return;
-    const client = supabase;
-    const currentSession = session;
+    if (!session || !token) return;
     const accept = async () => {
-      const { error } = await client.rpc("accept_coach_invite", {
-        invite_token: token,
-      });
-      if (error) {
-        notify(
-          error.message.includes("expir")
-            ? "Invitation invalide ou expirée."
-            : error.message,
-        );
+      try {
+        await acceptCoachInvite(token);
+      } catch (error) {
+        notify(error instanceof Error ? error.message : "Invitation invalide ou expirée.");
         return;
       }
-      await client.auth.updateUser({
-        data: { ...currentSession.user.user_metadata, role: "client" },
-      });
       setRole("client");
       setScreen("home");
       window.history.replaceState({}, "", window.location.pathname);
@@ -389,6 +438,8 @@ function App() {
       }
     }
     setActive(false);
+    setWorkoutPaused(false);
+    setWorkoutElapsedSeconds(0);
     setEffort(null);
     notify("Séance enregistrée — beau travail !");
   };
@@ -513,9 +564,7 @@ function App() {
           </button>
           <Brand mobile />
           <div className="top-actions">
-            <span className="demo-pill">
-              {isSupabaseConfigured ? "Données disponibles" : "Mode démo"}
-            </span>
+            {demoMode && <span className="demo-pill">Mode démonstration</span>}
             <button
               className="icon-button"
               disabled
@@ -596,6 +645,8 @@ function App() {
             workout={workout}
             start={() => {
               setScreen("workout");
+              setWorkoutPaused(false);
+              if (!active) setWorkoutElapsedSeconds(0);
               setActive(true);
             }}
             setScreen={setScreen}
@@ -604,12 +655,18 @@ function App() {
         ) : screen === "sessions" ? (
           <SessionsPage
             onOpen={(next) => {
-              setWorkout(next);
-              setActive(false);
+              const isCurrentWorkout = active && next.id === workout.id;
+              if (!isCurrentWorkout) {
+                setWorkout(next);
+                setActive(false);
+                setWorkoutPaused(false);
+                setWorkoutElapsedSeconds(0);
+              }
               setScreen("workout");
             }}
             onImport={() => setImportOpen(true)}
             notify={notify}
+            activeWorkoutId={active ? workout.id : null}
           />
         ) : screen === "workout" ? (
           <WorkoutScreen
@@ -617,6 +674,9 @@ function App() {
             setWorkout={setWorkout}
             active={active}
             setActive={setActive}
+            paused={workoutPaused}
+            setPaused={setWorkoutPaused}
+            elapsedSeconds={workoutElapsedSeconds}
             completed={completed}
             total={total}
             effort={effort}
@@ -658,6 +718,8 @@ function App() {
           onSaved={(next) => {
             setWorkout(next);
             setActive(false);
+            setWorkoutPaused(false);
+            setWorkoutElapsedSeconds(0);
             setScreen(role === "coach" ? "programs" : "workout");
             setImportOpen(false);
             notify("Séance importée dans votre programme");
@@ -970,14 +1032,9 @@ function MemberHome({
   };
   const [recentLogs, setRecentLogs] = useState<HomeLog[]>([]);
   useEffect(() => {
-    if (!supabase) return;
-    supabase
-      .from("workout_logs")
-      .select("completed_at,workouts(title),set_logs(load,reps)")
-      .eq("status", "completed")
-      .order("completed_at", { ascending: false })
-      .limit(20)
-      .then(({ data }) => setRecentLogs((data ?? []) as unknown as HomeLog[]));
+    const uid = firebaseAuth.currentUser?.uid;
+    if (!uid) return;
+    loadRecentLogs(uid).then((data) => setRecentLogs(data as HomeLog[])).catch(() => setRecentLogs([]));
   }, []);
   const today = new Intl.DateTimeFormat("fr-FR", {
     weekday: "long",
@@ -1165,9 +1222,62 @@ function ImportWorkout({
   const [processingFile, setProcessingFile] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiParsed, setAiParsed] = useState<AiWorkoutImport | null>(null);
+  const [editedParsed, setEditedParsed] = useState<AiWorkoutImport | null>(null);
+  const [editingExercise, setEditingExercise] = useState<number | null>(null);
   const [catalog, setCatalog] = useState<CatalogExercise[]>([]);
   const localParsed = useMemo(() => parseWorkoutText(text), [text]);
-  const parsed = aiParsed ?? localParsed;
+  const parsed = editedParsed ?? aiParsed ?? localParsed;
+  const updateImportedExercise = (
+    index: number,
+    changes: Partial<AiWorkoutImport["exercises"][number]>,
+  ) => {
+    setEditedParsed((current) => {
+      const source = current ?? {
+        ...(aiParsed ?? localParsed),
+        exercises: [...(aiParsed ?? localParsed).exercises],
+      };
+      return {
+        ...source,
+        exercises: source.exercises.map((exercise, exerciseIndex) =>
+          exerciseIndex === index ? { ...exercise, ...changes } : exercise,
+        ),
+      };
+    });
+  };
+  const removeImportedExercise = (index: number) => {
+    setEditedParsed((current) => {
+      const source = current ?? {
+        ...(aiParsed ?? localParsed),
+        exercises: [...(aiParsed ?? localParsed).exercises],
+      };
+      return {
+        ...source,
+        exercises: source.exercises.filter((_, exerciseIndex) => exerciseIndex !== index),
+      };
+    });
+    setEditingExercise(null);
+  };
+  const setImportedBlockType = (
+    index: number,
+    blockType: AiWorkoutImport["exercises"][number]["blockType"],
+  ) => {
+    const defaults = blockType === "EMOM"
+      ? { workSeconds: 60, blockRest: 0, blockRounds: 10, blockDuration: 600 }
+      : blockType === "AMRAP"
+        ? { workSeconds: null, blockRest: 0, blockRounds: 1, blockDuration: 600 }
+        : blockType === "Tabata"
+          ? { workSeconds: 20, blockRest: 10, blockRounds: 8, blockDuration: 240 }
+          : blockType === "Intervalles"
+            ? { workSeconds: 30, blockRest: 30, blockRounds: 10, blockDuration: 600 }
+            : blockType === "Circuit"
+              ? { workSeconds: 45, blockRest: 15, blockRounds: 4, blockDuration: 240 }
+              : { workSeconds: null, blockRest: null, blockRounds: null, blockDuration: null };
+    updateImportedExercise(index, {
+      blockType,
+      blockKey: blockType ? `bloc-${index + 1}` : null,
+      ...defaults,
+    });
+  };
   useEffect(() => {
     fetch("/data/exercises.json")
       .then((r) => r.json())
@@ -1185,6 +1295,8 @@ function ImportWorkout({
         throw new Error("Aucun texte détecté dans ce fichier.");
       setText(extracted);
       setAiParsed(null);
+      setEditedParsed(null);
+      setEditingExercise(null);
       setFileStatus("Fichier analysé — vérifiez le résultat ci-dessous.");
     } catch (caught) {
       setError(
@@ -1202,7 +1314,14 @@ function ImportWorkout({
     setAiBusy(true);
     setError("");
     try {
-      setAiParsed(await analyzeWorkoutWithAi(text));
+      const user = firebaseAuth.currentUser;
+      const examples = user
+        ? await loadSimilarImportCorrections(user.uid, text)
+        : [];
+      const result = await analyzeWorkoutWithAi(text, examples);
+      setAiParsed(result);
+      setEditedParsed(null);
+      setEditingExercise(null);
       setFileStatus("Séance structurée par l’IA — vérifiez avant d’ajouter.");
     } catch (caught) {
       setError(
@@ -1228,7 +1347,9 @@ function ImportWorkout({
       return;
     }
     try {
-      const program = await addDoc(collection(firestore, "programs"), {
+      const batch = writeBatch(firestore);
+      const program = doc(collection(firestore, "programs"));
+      batch.set(program, {
         owner_id: user.uid,
         title: parsed.title,
         description: "Importé depuis le programme de mon coach",
@@ -1262,7 +1383,8 @@ function ImportWorkout({
           sourceUrl: catalogMatch ? catalogSource(catalogMatch.id) : undefined,
         });
       });
-      const workout = await addDoc(collection(firestore, "workouts"), {
+      const workout = doc(collection(firestore, "workouts"));
+      batch.set(workout, {
         owner_id: user.uid,
         program_id: program.id,
         client_ids: {},
@@ -1275,6 +1397,17 @@ function ImportWorkout({
         ).map(([name, detail], position) => ({ name, detail, position })),
         created_at: serverTimestamp(),
       });
+      if (aiParsed && editedParsed && importWasCorrected(aiParsed, editedParsed)) {
+        const correction = doc(collection(firestore, "import_corrections"));
+        batch.set(correction, {
+          user_id: user.uid,
+          sourceText: text.slice(0, 12000),
+          before: JSON.parse(JSON.stringify(aiParsed)),
+          after: JSON.parse(JSON.stringify(editedParsed)),
+          created_at: serverTimestamp(),
+        });
+      }
+      await batch.commit();
       setBusy(false);
       onSaved({
         id: workout.id,
@@ -1357,6 +1490,8 @@ function ImportWorkout({
               onChange={(e) => {
                 setText(e.target.value);
                 setAiParsed(null);
+                setEditedParsed(null);
+                setEditingExercise(null);
               }}
               rows={8}
             />
@@ -1406,6 +1541,35 @@ function ImportWorkout({
                       <b>Consignes :</b> {e.notes}
                     </p>
                   )}
+                  <div className="parsed-actions">
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() => setEditingExercise(editingExercise === index ? null : index)}
+                    >
+                      <Pencil /> {editingExercise === index ? "Fermer" : "Modifier"}
+                    </button>
+                    <button
+                      type="button"
+                      className="text-button danger-text"
+                      onClick={() => removeImportedExercise(index)}
+                    >
+                      <Trash2 /> Supprimer
+                    </button>
+                  </div>
+                  {editingExercise === index && (
+                    <div className="parsed-editor">
+                      <label>Exercice<input value={e.name} onChange={(event) => updateImportedExercise(index, { name: event.target.value })} /></label>
+                      <label>Méthode<input value={e.method ?? ""} onChange={(event) => updateImportedExercise(index, { method: event.target.value || undefined })} /></label>
+                      <label>Format de travail<select value={e.blockType ?? ""} onChange={(event) => setImportedBlockType(index, (event.target.value || null) as AiWorkoutImport["exercises"][number]["blockType"])}><option value="">Séries classiques</option><option value="EMOM">EMOM</option><option value="AMRAP">AMRAP</option><option value="Tabata">Tabata</option><option value="Intervalles">Intervalles</option><option value="Circuit">Circuit</option></select></label>
+                      <label>Séries<input type="number" min="1" value={e.sets} onChange={(event) => updateImportedExercise(index, { sets: Math.max(1, Number(event.target.value) || 1) })} /></label>
+                      <label>Répétitions<input value={e.reps} onChange={(event) => updateImportedExercise(index, { reps: event.target.value })} /></label>
+                      <label>Charge<input value={e.load ?? ""} placeholder="ex. 115 kg ou PDC" onChange={(event) => updateImportedExercise(index, { load: event.target.value || null })} /></label>
+                      <label>Récupération (secondes)<input type="number" min="0" value={e.rest} onChange={(event) => updateImportedExercise(index, { rest: Math.max(0, Number(event.target.value) || 0) })} /></label>
+                      {e.blockType && <><label>Durée totale (secondes)<input type="number" min="1" value={e.blockDuration ?? ""} onChange={(event) => updateImportedExercise(index, { blockDuration: Number(event.target.value) || null })} /></label><label>Travail (secondes)<input type="number" min="1" value={e.workSeconds ?? ""} disabled={e.blockType === "AMRAP"} onChange={(event) => updateImportedExercise(index, { workSeconds: Number(event.target.value) || null })} /></label><label>Repos du bloc (secondes)<input type="number" min="0" value={e.blockRest ?? 0} onChange={(event) => updateImportedExercise(index, { blockRest: Math.max(0, Number(event.target.value) || 0) })} /></label><label>Nombre de tours<input type="number" min="1" value={e.blockRounds ?? 1} onChange={(event) => updateImportedExercise(index, { blockRounds: Math.max(1, Number(event.target.value) || 1) })} /></label></>}
+                      <label className="parsed-editor-wide">Consignes<textarea rows={2} value={e.notes ?? ""} onChange={(event) => updateImportedExercise(index, { notes: event.target.value || undefined })} /></label>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1438,10 +1602,12 @@ function SessionsPage({
   onOpen,
   onImport,
   notify,
+  activeWorkoutId,
 }: {
   onOpen: (workout: Workout) => void;
   onImport: () => void;
   notify: (message: string) => void;
+  activeWorkoutId: string | null;
 }) {
   const [items, setItems] = useState<WorkoutListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1618,10 +1784,10 @@ function SessionsPage({
                 </p>
               </div>
               <button
-                className="secondary"
+                className={activeWorkoutId === item.workout.id ? "primary" : "secondary"}
                 onClick={() => onOpen(item.workout)}
               >
-                <Play /> Commencer
+                <Play /> {activeWorkoutId === item.workout.id ? "Continuer" : "Commencer"}
               </button>
               <button
                 className="secondary"
@@ -2410,6 +2576,9 @@ function WorkoutScreen({
   setWorkout,
   active,
   setActive,
+  paused,
+  setPaused,
+  elapsedSeconds,
   completed,
   total,
   effort,
@@ -2421,6 +2590,9 @@ function WorkoutScreen({
   setWorkout: (w: Workout) => void;
   active: boolean;
   setActive: (v: boolean) => void;
+  paused: boolean;
+  setPaused: React.Dispatch<React.SetStateAction<boolean>>;
+  elapsedSeconds: number;
   completed: number;
   total: number;
   effort: Effort | null;
@@ -2431,8 +2603,6 @@ function WorkoutScreen({
   const progress = Math.round((completed / total) * 100);
   const isStructured = workout.exercises.some((exercise) => exercise.method);
   const progressUnit = isStructured ? "étapes" : "séries";
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [paused, setPaused] = useState(false);
   const [demo, setDemo] = useState<Exercise | null>(null);
   const [selectedMuscle, setSelectedMuscle] = useState<MuscleZone | null>(null);
   const visibleExercises = selectedMuscle
@@ -2441,24 +2611,19 @@ function WorkoutScreen({
         return muscles.primary.includes(selectedMuscle) || muscles.secondary.includes(selectedMuscle);
       })
     : workout.exercises;
-  useEffect(() => {
-    if (!active) {
-      setElapsedSeconds(0);
-      return;
-    }
-    if (paused) return;
-    const timer = window.setInterval(
-      () => setElapsedSeconds((value) => value + 1),
-      1000,
-    );
-    return () => window.clearInterval(timer);
-  }, [active, paused]);
   const elapsed = `${String(Math.floor(elapsedSeconds / 60)).padStart(2, "0")}:${String(elapsedSeconds % 60).padStart(2, "0")}`;
-  const mark = (id: string) =>
+  const mark = (id: string, index: number) =>
     setWorkout({
       ...workout,
       exercises: workout.exercises.map((e) =>
-        e.id === id ? { ...e, done: Math.min(e.sets, e.done + 1) } : e,
+        e.id === id
+          ? {
+              ...e,
+              // A tap validates this set and every preceding one. Tapping an
+              // already completed set reopens it and the following sets.
+              done: index < e.done ? index : Math.min(e.sets, index + 1),
+            }
+          : e,
       ),
     });
   const updateSet = (
@@ -2692,11 +2857,13 @@ function WorkoutScreen({
                     >
                       <span>{setStatus(e, j)}</span>
                       <button
-                        disabled={j !== e.done}
-                        onClick={() => mark(e.id)}
-                        title="Marquer la série comme faite"
+                        className="set-done-button"
+                        onClick={() => mark(e.id, j)}
+                        title={j < e.done ? "Décocher cette série" : "Marquer la série comme faite"}
+                        aria-pressed={j < e.done}
                       >
                         <Check />
+                        <span>{j < e.done ? "Fait" : "Valider"}</span>
                       </button>
                     </div>
                   </div>
@@ -2738,10 +2905,17 @@ function WorkoutScreen({
             )}
             <button
               className="primary"
-              disabled={completed !== total}
-              onClick={() => finish(elapsedSeconds)}
+              onClick={() => {
+                if (
+                  completed !== total &&
+                  !window.confirm(
+                    `Il reste ${total - completed} série${total - completed > 1 ? "s" : ""} non validée${total - completed > 1 ? "s" : ""}. Terminer quand même ?`,
+                  )
+                ) return;
+                finish(elapsedSeconds);
+              }}
             >
-              {completed === total ? "Terminer la séance" : "Séries restantes"}
+              {completed === total ? "Terminer la séance" : "Terminer quand même"}
             </button>
           </div>
         </>
@@ -3083,62 +3257,7 @@ function useCoachClients() {
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     const load = async () => {
-      if (!supabase) {
-        setLoading(false);
-        return;
-      }
-      const { data: auth } = await supabase.auth.getUser();
-      if (!auth.user) {
-        setLoading(false);
-        return;
-      }
-      const { data: links, error } = await supabase
-        .from("coach_clients")
-        .select("client_id")
-        .eq("coach_id", auth.user.id)
-        .eq("status", "active");
-      if (error || !links?.length) {
-        setClients([]);
-        setLoading(false);
-        return;
-      }
-      const ids = links.map((link) => link.client_id);
-      const [{ data: profiles }, { data: logs }] = await Promise.all([
-        supabase.from("profiles").select("id,display_name").in("id", ids),
-        supabase
-          .from("workout_logs")
-          .select("user_id,completed_at")
-          .in("user_id", ids)
-          .eq("status", "completed")
-          .order("completed_at", { ascending: false }),
-      ]);
-      const weekStart = new Date();
-      weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
-      weekStart.setHours(0, 0, 0, 0);
-      setClients(
-        (profiles ?? []).map((profile, index) => {
-          const clientLogs = (logs ?? []).filter(
-            (log) => log.user_id === profile.id,
-          );
-          const name = String(profile.display_name || "Client");
-          return {
-            id: profile.id,
-            name,
-            initials: name
-              .split(/\s+/)
-              .map((part) => part[0])
-              .join("")
-              .slice(0, 2)
-              .toUpperCase(),
-            color: ["#dff56d", "#d9e8ff", "#ffe3cf", "#eadcff"][index % 4],
-            lastActivity: clientLogs[0]?.completed_at ?? null,
-            completedThisWeek: clientLogs.filter(
-              (log) =>
-                log.completed_at && new Date(log.completed_at) >= weekStart,
-            ).length,
-          };
-        }),
-      );
+      try { setClients(await loadCoachClients()); } catch { setClients([]); }
       setLoading(false);
     };
     void load();
@@ -3150,27 +3269,12 @@ function InviteClientButton({ notify }: { notify: (message: string) => void }) {
   const [inviteUrl, setInviteUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const createInvite = async () => {
-    if (!supabase) return;
     setBusy(true);
-    const { data: auth } = await supabase.auth.getUser();
-    if (!auth.user) {
-      setBusy(false);
-      notify("Votre session a expiré.");
-      return;
-    }
-    const token = crypto.randomUUID();
-    const { error } = await supabase.from("coach_invites").insert({
-      coach_id: auth.user.id,
-      token,
-    });
-    setBusy(false);
-    if (error) {
-      notify(error.message);
-      return;
-    }
-    setInviteUrl(
-      `${window.location.origin}${window.location.pathname}?invite=${token}`,
-    );
+    try {
+      const token = await createCoachInvite();
+      setInviteUrl(`${window.location.origin}${window.location.pathname}?invite=${token}`);
+    } catch (error) { notify(error instanceof Error ? error.message : "Invitation impossible"); }
+    finally { setBusy(false); }
   };
   const copy = async () => {
     await navigator.clipboard.writeText(inviteUrl);
@@ -3466,37 +3570,12 @@ function ClientDetail({
   const [confirmEnd, setConfirmEnd] = useState(false);
 
   const load = async () => {
-    if (!supabase) return;
     setLoading(true);
-    const [profileResult, assignmentResult, logResult, noteResult] =
-      await Promise.all([
-        supabase
-          .from("profiles")
-          .select("display_name")
-          .eq("id", clientId)
-          .single(),
-        supabase
-          .from("program_assignments")
-          .select("id,starts_on,active,programs(id,title,workouts(id,title))")
-          .eq("client_id", clientId)
-          .order("starts_on", { ascending: false }),
-        supabase
-          .from("workout_logs")
-          .select("id,completed_at,effort,workouts(title),set_logs(load,reps)")
-          .eq("user_id", clientId)
-          .eq("status", "completed")
-          .order("completed_at", { ascending: false })
-          .limit(30),
-        supabase
-          .from("coach_client_notes")
-          .select("id,content,created_at")
-          .eq("client_id", clientId)
-          .order("created_at", { ascending: false }),
-      ]);
-    setName(profileResult.data?.display_name ?? "Client");
-    setAssignments((assignmentResult.data ?? []) as unknown as Assignment[]);
-    setLogs((logResult.data ?? []) as unknown as ClientLog[]);
-    setNotes((noteResult.data ?? []) as PrivateNote[]);
+    try {
+      const data = await loadClientDetails(clientId);
+      setName(data.name); setAssignments(data.assignments as Assignment[]);
+      setLogs(data.logs as ClientLog[]); setNotes(data.notes as PrivateNote[]);
+    } catch (error) { notify(error instanceof Error ? error.message : "Chargement impossible"); }
     setLoading(false);
   };
   useEffect(() => {
@@ -3504,44 +3583,25 @@ function ClientDetail({
   }, [clientId]);
 
   const addNote = async () => {
-    if (!supabase || !note.trim()) return;
+    if (!note.trim()) return;
     setSavingNote(true);
-    const { data: auth } = await supabase.auth.getUser();
-    const { error } = await supabase.from("coach_client_notes").insert({
-      coach_id: auth.user?.id,
-      client_id: clientId,
-      content: note.trim(),
-    });
+    try { await addClientNote(clientId, note.trim()); }
+    catch (error) { notify(error instanceof Error ? error.message : "Enregistrement impossible"); setSavingNote(false); return; }
     setSavingNote(false);
-    if (error) {
-      notify(error.message);
-      return;
-    }
     setNote("");
     notify("Note privée enregistrée");
     void load();
   };
   const deactivate = async (assignmentId: string) => {
-    if (!supabase) return;
-    const { error } = await supabase
-      .from("program_assignments")
-      .update({ active: false })
-      .eq("id", assignmentId);
-    if (error) notify(error.message);
-    else {
+    try {
+      await deactivateAssignment(assignmentId);
       notify("Programme désactivé");
       void load();
-    }
+    } catch (error) { notify(error instanceof Error ? error.message : "Modification impossible"); }
   };
   const endCoaching = async () => {
-    if (!supabase) return;
-    const { error } = await supabase.rpc("end_coaching", {
-      target_client: clientId,
-    });
-    if (error) {
-      notify(error.message);
-      return;
-    }
+    try { await endFirebaseCoaching(clientId); }
+    catch (error) { notify(error instanceof Error ? error.message : "Modification impossible"); return; }
     setConfirmEnd(false);
     notify("Accompagnement terminé");
     onBack();
@@ -3829,32 +3889,12 @@ function AssignProgramButton({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const assign = async () => {
-    if (!supabase || !clientId) return;
+    if (!clientId) return;
     setBusy(true);
     setError("");
-    const { data: auth } = await supabase.auth.getUser();
-    if (!auth.user) {
-      setBusy(false);
-      setError("Votre session a expiré.");
-      return;
-    }
-    const { error: assignError } = await supabase
-      .from("program_assignments")
-      .upsert(
-        {
-          program_id: program.id,
-          client_id: clientId,
-          assigned_by: auth.user.id,
-          starts_on: startsOn,
-          active: true,
-        },
-        { onConflict: "program_id,client_id" },
-      );
+    try { await assignProgram(program.id, clientId, startsOn); }
+    catch (assignError) { setError(assignError instanceof Error ? assignError.message : "Attribution impossible"); setBusy(false); return; }
     setBusy(false);
-    if (assignError) {
-      setError(assignError.message);
-      return;
-    }
     setOpen(false);
     setClientId("");
     onAssigned();
@@ -3980,20 +4020,11 @@ function ProgramEditor({
   const [busy, setBusy] = useState(false);
 
   const load = async () => {
-    if (!supabase) return;
     setLoading(true);
-    const { data, error } = await supabase
-      .from("programs")
-      .select(
-        "id,title,workouts(id,title,position,estimated_minutes,workout_blocks(id,title,block_type,duration_seconds,work_seconds,rest_seconds,rounds),workout_exercises(id,position,sets,reps,rest_seconds,block_id,exercises(name)))",
-      )
-      .eq("id", programId)
-      .single();
+    let data;
+    try { data = await loadProgramEditor(programId); }
+    catch (error) { setLoading(false); notify(error instanceof Error ? error.message : "Programme introuvable"); return; }
     setLoading(false);
-    if (error || !data) {
-      notify(error?.message ?? "Programme introuvable");
-      return;
-    }
     const next = ((data.workouts ?? []) as unknown as EditorWorkout[])
       .sort((a, b) => a.position - b.position)
       .map((workout) => ({
@@ -4017,70 +4048,27 @@ function ProgramEditor({
   const selected = workouts.find((item) => item.id === selectedWorkoutId);
 
   const createWorkout = async () => {
-    if (!supabase || !newWorkoutTitle.trim()) return;
+    if (!newWorkoutTitle.trim()) return;
     setBusy(true);
-    const { data, error } = await supabase
-      .from("workouts")
-      .insert({
-        program_id: programId,
-        title: newWorkoutTitle.trim(),
-        position: workouts.length + 1,
-        estimated_minutes: 45,
-      })
-      .select("id")
-      .single();
+    let created;
+    try { created = await createProgramWorkout(programId, newWorkoutTitle.trim(), workouts.length + 1); }
+    catch (error) { setBusy(false); notify(error instanceof Error ? error.message : "Création impossible"); return; }
     setBusy(false);
-    if (error) notify(error.message);
-    else {
-      setNewWorkoutTitle("");
-      await load();
-      if (data?.id) setSelectedWorkoutId(data.id);
-    }
+    setNewWorkoutTitle(""); await load(); setSelectedWorkoutId(created.id);
   };
   const addExercise = async () => {
-    if (!supabase || !selected || !exerciseName.trim()) return;
+    if (!selected || !exerciseName.trim()) return;
     setBusy(true);
-    const { data: auth } = await supabase.auth.getUser();
-    const slug = slugifyExercise(exerciseName);
-    let { data: exercise } = await supabase
-      .from("exercises")
-      .select("id")
-      .eq("slug", slug)
-      .maybeSingle();
-    if (!exercise) {
-      const created = await supabase
-        .from("exercises")
-        .insert({ name: exerciseName.trim(), slug, created_by: auth.user?.id })
-        .select("id")
-        .single();
-      if (created.error) {
-        setBusy(false);
-        notify(created.error.message);
-        return;
-      }
-      exercise = created.data;
-    }
-    const { error } = await supabase.from("workout_exercises").insert({
-      workout_id: selected.id,
-      exercise_id: exercise.id,
-      position: selected.workout_exercises.length + 1,
-      sets,
-      reps,
-      rest_seconds: restSeconds,
-      block_id: blockId || null,
-    });
+    try { await addProgramExercise(selected.id, { id: crypto.randomUUID(), position: selected.workout_exercises.length + 1, sets, reps, rest_seconds: restSeconds, rest: restSeconds, block_id: blockId || null, exercises: { name: exerciseName.trim() }, name: exerciseName.trim(), done: 0 }); }
+    catch (error) { setBusy(false); notify(error instanceof Error ? error.message : "Ajout impossible"); return; }
     setBusy(false);
-    if (error) notify(error.message);
-    else {
-      setExerciseName("");
-      void load();
-    }
+    setExerciseName(""); void load();
   };
   const addBlock = async () => {
-    if (!supabase || !selected || !blockTitle.trim()) return;
+    if (!selected || !blockTitle.trim()) return;
     setBusy(true);
-    const { error } = await supabase.from("workout_blocks").insert({
-      workout_id: selected.id,
+    try { await addProgramBlock(selected.id, {
+      id: crypto.randomUUID(),
       block_key: `${blockType.toLowerCase()}-${crypto.randomUUID().slice(0, 8)}`,
       title: blockTitle.trim(),
       block_type: blockType,
@@ -4090,40 +4078,26 @@ function ProgramEditor({
       work_seconds: blockWork,
       rest_seconds: blockRest,
       rounds: blockRounds,
-    });
+    }); } catch (error) { setBusy(false); notify(error instanceof Error ? error.message : "Ajout impossible"); return; }
     setBusy(false);
-    if (error) notify(error.message);
-    else {
-      notify("Bloc chronométré ajouté");
-      void load();
-    }
+    notify("Bloc chronométré ajouté"); void load();
   };
   const removeLine = async (lineId: string) => {
-    if (!supabase) return;
-    const { error } = await supabase
-      .from("workout_exercises")
-      .delete()
-      .eq("id", lineId);
-    if (error) notify(error.message);
-    else void load();
+    if (!selected) return;
+    try { await replaceProgramExercises(selected.id, selected.workout_exercises.filter((line) => line.id !== lineId)); void load(); }
+    catch (error) { notify(error instanceof Error ? error.message : "Suppression impossible"); }
   };
   const moveLine = async (index: number, direction: -1 | 1) => {
-    if (!supabase || !selected) return;
+    if (!selected) return;
     const otherIndex = index + direction;
     if (otherIndex < 0 || otherIndex >= selected.workout_exercises.length)
       return;
     const current = selected.workout_exercises[index];
     const other = selected.workout_exercises[otherIndex];
-    await Promise.all([
-      supabase
-        .from("workout_exercises")
-        .update({ position: other.position })
-        .eq("id", current.id),
-      supabase
-        .from("workout_exercises")
-        .update({ position: current.position })
-        .eq("id", other.id),
-    ]);
+    const next = [...selected.workout_exercises];
+    next[index] = { ...other, position: current.position };
+    next[otherIndex] = { ...current, position: other.position };
+    await replaceProgramExercises(selected.id, next);
     void load();
   };
 
@@ -4378,45 +4352,22 @@ function ProgramsLive({
   const [error, setError] = useState("");
   const { clients: coachClients } = useCoachClients();
   const load = async () => {
-    if (!supabase) return;
     setLoading(true);
-    const { data, error } = await supabase
-      .from("programs")
-      .select(
-        "id,title,description,duration_weeks,created_at,workouts(id),program_assignments(id)",
-      )
-      .order("created_at", { ascending: false });
+    try { setItems(await loadPrograms() as ProgramRecord[]); setError(""); }
+    catch (error) { setError(error instanceof Error ? error.message : "Chargement impossible"); }
     setLoading(false);
-    if (error) {
-      setError(error.message);
-      return;
-    }
-    setItems(data ?? []);
   };
   useEffect(() => {
     void load();
   }, []);
   const create = async () => {
-    if (!supabase) return;
     const title = window
       .prompt("Nom du nouveau programme", "Nouveau programme")
       ?.trim();
     if (!title) return;
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-      setError("Votre session a expiré.");
-      return;
-    }
-    const { error } = await supabase
-      .from("programs")
-      .insert({ owner_id: user.id, title, duration_weeks: 8 });
-    if (error) {
-      setError(error.message);
-      return;
-    }
-    notify("Programme créé dans Supabase");
+    try { await createProgram(title); }
+    catch (error) { setError(error instanceof Error ? error.message : "Création impossible"); return; }
+    notify("Programme créé dans Firebase");
     void load();
   };
   return (
@@ -4603,16 +4554,9 @@ function Profile({
   useEffect(() => {
     setName(displayName);
     setNextEmail(email);
-    if (!supabase || demoMode) return;
-    supabase.auth.getUser().then(({ data }) => {
-      if (!data.user) return;
-      supabase
-        ?.from("profiles")
-        .select("avatar_url")
-        .eq("id", data.user.id)
-        .single()
-        .then(({ data: profile }) => setAvatarUrl(profile?.avatar_url ?? ""));
-    });
+    const user = firebaseAuth.currentUser;
+    if (!user || demoMode) return;
+    getDoc(doc(firestore, "profiles", user.uid)).then((profile) => setAvatarUrl(profile.data()?.avatar_url ?? ""));
   }, [displayName, email, demoMode]);
   const initials = name
     .split(/\s+/)
@@ -4622,68 +4566,46 @@ function Profile({
     .toUpperCase();
   const saveProfile = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!supabase || demoMode || !name.trim()) return;
+    if (demoMode || !name.trim()) return;
     if (password && password.length < 6) {
       setMessage("Le mot de passe doit contenir au moins 6 caractères.");
       return;
     }
     setSaving(true);
     setMessage("");
-    const { data: auth } = await supabase.auth.getUser();
-    if (!auth.user) {
+    const user = firebaseAuth.currentUser;
+    if (!user) {
       setSaving(false);
       setMessage("Votre session a expiré.");
       return;
     }
-    const profileResult = await supabase
-      .from("profiles")
-      .update({
-        display_name: name.trim(),
-        avatar_url: avatarUrl.trim() || null,
-      })
-      .eq("id", auth.user.id);
-    const attributes: {
-      email?: string;
-      password?: string;
-      data: Record<string, unknown>;
-    } = {
-      data: { ...auth.user.user_metadata, display_name: name.trim() },
-    };
-    if (nextEmail.trim() && nextEmail.trim() !== email)
-      attributes.email = nextEmail.trim();
-    if (password) attributes.password = password;
-    const authResult = await supabase.auth.updateUser(attributes);
+    const emailChanged = nextEmail.trim() && nextEmail.trim() !== email;
+    try {
+      await setDoc(doc(firestore, "profiles", user.uid), { display_name: name.trim(), avatar_url: avatarUrl.trim() || null }, { merge: true });
+      await updateProfile(user, { displayName: name.trim(), photoURL: avatarUrl.trim() || null });
+      if (emailChanged) await updateEmail(user, nextEmail.trim());
+      if (password) await updatePassword(user, password);
+    } catch (error) { setSaving(false); setMessage(error instanceof Error ? error.message : "Modification impossible."); return; }
     setSaving(false);
-    if (profileResult.error || authResult.error) {
-      setMessage(
-        profileResult.error?.message ??
-          authResult.error?.message ??
-          "Modification impossible.",
-      );
-      return;
-    }
     setPassword("");
     setMessage(
-      attributes.email
+      emailChanged
         ? "Profil enregistré. Confirmez le nouvel e-mail depuis votre boîte de réception."
         : "Profil enregistré.",
     );
   };
   const deleteAccount = async () => {
-    if (!supabase || deleteText !== "SUPPRIMER") return;
+    if (deleteText !== "SUPPRIMER") return;
     setDeleting(true);
-    const { error } = await supabase.functions.invoke("delete-account", {
-      body: {},
-    });
-    if (error) {
+    try {
+      const removeAccount = httpsCallable(firebaseFunctions, "deleteAccount");
+      await removeAccount({});
+    } catch {
       setDeleting(false);
-      setMessage(
-        "Suppression impossible. Vérifiez que la fonction delete-account est déployée.",
-      );
+      setMessage("Suppression impossible. Vérifiez que la fonction Firebase deleteAccount est déployée.");
       return;
     }
     setDeleteOpen(false);
-    await supabase.auth.signOut();
     onSignOut();
   };
   return (

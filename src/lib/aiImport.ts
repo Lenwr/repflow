@@ -1,5 +1,7 @@
 import { normalizeWorkoutOcr, type ImportedExercise } from "./importProgram";
-import { supabase } from "./supabase";
+import { httpsCallable } from "firebase/functions";
+import { firebaseFunctions } from "./firebase";
+import type { ImportCorrectionExample } from "./importLearning";
 
 export type AiWorkoutImport = {
   title: string;
@@ -10,18 +12,20 @@ export type AiWorkoutImport = {
 
 export async function analyzeWorkoutWithAi(
   text: string,
+  examples: ImportCorrectionExample[] = [],
 ): Promise<AiWorkoutImport> {
-  if (!supabase) throw new Error("Supabase n’est pas connecté.");
-
   const normalizedText = normalizeWorkoutOcr(text);
-
-  const { data, error } = await supabase.functions.invoke("parse-workout", {
-    body: { text: normalizedText },
-  });
-
-  if (error) {
+  let data: AiWorkoutImport;
+  try {
+    const parseWorkout = httpsCallable<
+      { text: string; examples: ImportCorrectionExample[] },
+      AiWorkoutImport
+    >(firebaseFunctions, "parseWorkout");
+    const result = await parseWorkout({ text: normalizedText, examples });
+    data = result.data;
+  } catch {
     throw new Error(
-      "L’analyse IA n’est pas encore disponible. Vérifiez que la fonction Supabase et la clé OpenAI sont installées.",
+      "L’analyse IA Firebase n’est pas encore disponible. Vérifiez que la fonction parseWorkout et la clé OpenAI sont déployées.",
     );
   }
   if (!data?.title || !Array.isArray(data.exercises)) {
@@ -55,5 +59,5 @@ export async function analyzeWorkoutWithAi(
     };
   });
 
-  return { ...(data as AiWorkoutImport), exercises };
+  return { ...data, exercises };
 }
